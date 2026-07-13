@@ -1,3 +1,5 @@
+using System;
+using System.Linq;
 using System.Reflection;
 using Godot;
 using HarmonyLib;
@@ -42,30 +44,67 @@ public static class DeckViewMod
     // columns/rows. Set equal to 40f to keep vanilla spacing.
     public const float CardPadding = 24f;
 
-    // This build patches internal names (NCardGrid.ConnectSignals, _cardSize, SmallScale,
-    // NCardGrid._Process, NGridCardHolder.Create, and several private NCardHolder /
-    // NClickableControl fields) that MegaCrit can rename in any patch, so it is pinned to
-    // the exact game version it was built and tested against. On any other version it
-    // refuses to patch (fails safe: no crashes, vanilla UI) and logs why. Bump this — and
-    // rebuild against that build's sts2.dll — to support a new game version.
-    public const string TargetGameVersion = "v0.108.0";
+    // DeckView was built and tested against this game version. It patches internal names
+    // (methods + private fields) that MegaCrit can rename between builds, so this is the
+    // build we KNOW matches. On other versions DeckView does NOT blindly self-disable: it
+    // probes for the members it hooks and patches anyway if they're all still there (point
+    // releases usually don't move them). If a hooked member is missing — or patching throws
+    // — it backs out cleanly and leaves the UI vanilla rather than crashing the game.
+    public const string TestedGameVersion = "v0.108.0";
+
+    private const string HarmonyId = "ernes.deckview";
 
     public static void Init()
     {
         string? gameVersion = ReleaseInfoManager.Instance.ReleaseInfo?.Version;
-        if (gameVersion != TargetGameVersion)
+        try
         {
-            Log.Error(
-                $"[DeckView] built for Slay the Spire 2 {TargetGameVersion} ONLY, but this game is " +
-                $"'{gameVersion ?? "unknown"}'. Skipping all patches to avoid breakage — update DeckView " +
-                $"for this game version.");
-            return;
-        }
+            if (!EssentialHooksPresent(out string missing))
+            {
+                Log.Error(
+                    $"[DeckView] this game ('{gameVersion ?? "unknown"}') is missing members DeckView hooks " +
+                    $"({missing}). Leaving the UI vanilla — DeckView was built for {TestedGameVersion} and likely " +
+                    $"needs a rebuild against this version.");
+                return;
+            }
 
-        new Harmony("ernes.deckview").PatchAll(typeof(DeckViewMod).Assembly);
-        Log.Info(
-            $"[DeckView] loaded — game {TargetGameVersion}, card scale x{CardScaleFactor}, padding {CardPadding}px" +
-            (GridHoverGate.Viable ? "" : " (hover reconcile DISABLED: private fields not found — a card may open enlarged)"));
+            new Harmony(HarmonyId).PatchAll(typeof(DeckViewMod).Assembly);
+
+            string versionNote = gameVersion == TestedGameVersion
+                ? ""
+                : $" — NOTE: game '{gameVersion ?? "unknown"}' is not the tested {TestedGameVersion}; hooks matched so " +
+                  "it's patched, but re-verify and report anything off";
+            Log.Info(
+                $"[DeckView] loaded — card scale x{CardScaleFactor}, padding {CardPadding}px" +
+                (GridHoverGate.Viable ? "" : " [hover reconcile disabled: private fields not found — a card may open enlarged]") +
+                versionNote);
+        }
+        catch (Exception e)
+        {
+            new Harmony(HarmonyId).UnpatchAll(HarmonyId);
+            Log.Error(
+                $"[DeckView] failed to patch game '{gameVersion ?? "unknown"}' — backed out, UI left vanilla. {e}");
+        }
+    }
+
+    // Verify every member PatchAll will hook actually exists on the running game, so an
+    // unknown/incompatible version fails cleanly (tidy log, vanilla UI) instead of throwing
+    // part-way through patching.
+    private static bool EssentialHooksPresent(out string missing)
+    {
+        (string name, bool ok)[] hooks =
+        {
+            ("NCardGrid.ConnectSignals", AccessTools.Method(typeof(NCardGrid), "ConnectSignals") != null),
+            ("NCardGrid._cardSize", AccessTools.Field(typeof(NCardGrid), "_cardSize") != null),
+            ("NCardHolder.SmallScale", AccessTools.PropertyGetter(typeof(NCardHolder), "SmallScale") != null),
+            ("NCardGrid.CardPadding", AccessTools.PropertyGetter(typeof(NCardGrid), "CardPadding") != null),
+            ("NCardGrid._Process", AccessTools.Method(typeof(NCardGrid), "_Process") != null),
+            ("NGridCardHolder.Create", AccessTools.Method(typeof(NGridCardHolder), "Create") != null),
+            ("NCardGrid.CurrentlyDisplayedCardHolders",
+                AccessTools.PropertyGetter(typeof(NCardGrid), "CurrentlyDisplayedCardHolders") != null),
+        };
+        missing = string.Join(", ", hooks.Where(h => !h.ok).Select(h => h.name));
+        return missing.Length == 0;
     }
 }
 

@@ -1,9 +1,9 @@
 # Publishing DeckView to the Steam Workshop
 
-DeckView is pinned to **Slay the Spire 2 v0.108.0** — it self-disables on any other
-game version (runtime check in `DeckViewMod.Init`) and the manifest name/description say
-so. Keep that promise honest: only publish a build you actually tested on the version in
-the title.
+DeckView is **built and tested against Slay the Spire 2 v0.108.0** (`TestedGameVersion` in
+`DeckViewMod.cs`). On other versions it probes for the members it hooks and patches only if
+they're still present, otherwise it backs out and leaves the UI vanilla (it never crashes).
+Only publish a build you actually tested on the version in the title.
 
 ## 0. Verify the current build in-game first
 
@@ -12,11 +12,12 @@ full size, and check the log line in
 `C:\Users\ernes\AppData\Roaming\SlayTheSpire2\logs\godot.log`:
 
 ```
-[INFO] [DeckView] loaded — game v0.108.0, card scale x0.6, padding 24px
+[INFO] [DeckView] loaded — card scale x0.6, padding 24px
 ```
 
-(On any other game version you'd instead see a `[DeckView] built for … v0.108.0 ONLY …`
-error and no patches — that's the guard working.)
+(On a version whose internals moved you'd instead see `[DeckView] this game … is missing
+members DeckView hooks (…)` and no patches — that's the graceful fallback. A hard failure
+mid-patch logs `[DeckView] failed to patch … backed out, UI left vanilla`.)
 
 ## 1. Get MegaCrit's uploader
 
@@ -40,11 +41,11 @@ Download `ModUploader.exe` from https://github.com/megacrit/sts2-mod-uploader
 Edit the generated `workshop.json` (use the tool's field names as authoritative). Values
 to use:
 
-- **Title:** `DeckView (game v0.108.0 only)`
+- **Title:** `DeckView`
 - **Visibility:** start `private` or `friends` for a first test, switch to `public` once
   you've subscribed and confirmed it loads from Workshop.
 - **Tags:** whatever the game exposes (e.g. `UI`, `Quality of Life`).
-- **changeNote** (on updates): short summary, e.g. "Initial release. Requires game v0.108.0."
+- **changeNote** (on updates): short summary, e.g. "Initial release. Built for game v0.108.0."
 - **Description:** paste the block below.
 
 ```
@@ -55,9 +56,10 @@ whole deck is easier to read at a glance. Hover still pops a card to full size.
 Left at normal size: the combat hand, the inspect popup, and the choose-a-card,
 card-reward, unlock, shop, and card-bundle screens.
 
-Works with Slay the Spire 2 v0.108.0 ONLY. The mod checks the game version on load and
-self-disables (no patches, vanilla UI) on any other version, so it can't silently break a
-newer build. If the game updates past v0.108.0, wait for a DeckView update.
+Built and tested for Slay the Spire 2 v0.108.0. On other versions it patches only if the
+game internals it hooks are still present, and otherwise leaves the UI vanilla — it never
+crashes the game. If a game update changes those internals, you'll get stock card sizes
+until a rebuilt DeckView is published.
 
 No gameplay effect (UI/layout only).
 ```

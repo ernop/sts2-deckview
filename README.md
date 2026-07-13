@@ -1,8 +1,10 @@
 # DeckView — smaller deck-view cards for Slay the Spire 2
 
-> **Works with Slay the Spire 2 `v0.108.0` only.** It checks the game version on load and
-> self-disables (vanilla UI, no crash) on anything else, so a game update can't silently
-> break your run — you just wait for a DeckView update.
+> **Built and tested for Slay the Spire 2 `v0.108.0`.** On other versions it doesn't blindly
+> switch off: at load it checks that the game internals it hooks are still present and patches
+> anyway if they are (minor updates usually don't move them). If something it needs is missing
+> — or patching fails — it backs out and leaves the UI vanilla rather than crashing. Either
+> way a game update can't break your run; worst case you get stock card sizes until a rebuild.
 
 ## What it's for
 
@@ -82,10 +84,11 @@ A/B check: launch with `--nomods` to see vanilla for comparison.
 ## Status / caveats
 
 - **Built against the game's own `v0.108.0` assemblies and confirmed working in-game** — the
-  deck view shrinks, hover still zooms, and no card opens stuck-large. Pinned to `v0.108.0`
-  via `TargetGameVersion` in `DeckViewMod.cs` and `min_game_version` in `manifest.json`; it
-  refuses to patch on any other version. (The patch logic was originally written against a
-  `v0.103.3` decompile, then built and verified on `v0.108.0`.)
+  deck view shrinks, hover still zooms, and no card opens stuck-large. `TestedGameVersion` in
+  `DeckViewMod.cs` records that build; `min_game_version` in `manifest.json` is the floor. On
+  a newer game version DeckView probes for the members it hooks and patches if they're still
+  there, otherwise backs out to vanilla (see the load behavior above). (The patch logic was
+  originally written against a `v0.103.3` decompile, then built and verified on `v0.108.0`.)
 - Member names it depends on — re-check and rebuild after any game update:
   `NCardGrid.ConnectSignals`, private field `NCardGrid._cardSize`,
   `NCardGrid.CardPadding` getter, `NCardHolder.SmallScale` getter, and that
