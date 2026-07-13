@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Output must be named <manifest id>.dll => deckview.dll -->
+    <AssemblyName>deckview</AssemblyName>
+    <TargetFramework>net9.0</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>11.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- The mod is loaded into the game's own AssemblyLoadContext; enable dynamic-loading
+         dependency resolution and do NOT bundle the game's own assemblies. -->
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+  </PropertyGroup>
+
+  <!-- Path to the game's managed-DLL folder. Override with:
+         dotnet build -p:Sts2Data="D:\Path\...\data_sts2_windows_x86_64"
+       or set the STS2_DATA environment variable. -->
+  <PropertyGroup>
+    <Sts2Data Condition="'$(Sts2Data)' == '' and '$(STS2_DATA)' != ''">$(STS2_DATA)</Sts2Data>
+    <Sts2Data Condition="'$(Sts2Data)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64</Sts2Data>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Game + engine + Harmony are provided by the running game; reference-only, never copied. -->
+    <Reference Include="sts2">
+      <HintPath>$(Sts2Data)\sts2.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GodotSharp">
+      <HintPath>$(Sts2Data)\GodotSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(Sts2Data)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
