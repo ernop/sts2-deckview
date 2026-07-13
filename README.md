@@ -1,14 +1,23 @@
-# DeckView (Slay the Spire 2)
+# DeckView — smaller deck-view cards for Slay the Spire 2
 
-Shrinks the cards in deck-like views — the deck view, draw/discard/exhaust piles, the
-card library, and deck card-select screens — so more fit on screen and the whole deck
-is easier to read at a glance. Cards stay small until you actually mouse over one, which
-pops it to full size; move off and it shrinks back. The combat hand, the inspect popup,
-and shop/card-bundle screens are left at their normal size.
+> **Works with Slay the Spire 2 `v0.108.0` only.** It checks the game version on load and
+> self-disables (vanilla UI, no crash) on anything else, so a game update can't silently
+> break your run — you just wait for a DeckView update.
 
-This is a Slay the Spire **2** reimplementation of the STS1 DeckView mod (`../stsmod`).
-STS1 was Java + ModTheSpire; STS2 is Godot + C#, so this is a rewrite using STS2's
-built-in mod loader and Harmony. See `../stsmod/STS2_PORT.md` for the full design notes.
+## What it's for
+
+STS2 draws deck-like views at a size where only a handful of cards fit on screen, so you
+scroll a lot and can't take your deck in at a glance. DeckView shrinks those cards so more
+of the deck fits at once and the whole thing is easier to read. Cards stay small until you
+mouse over one, which pops it to full size; move off and it shrinks back.
+
+- **Shrinks:** the deck view, the draw / discard / exhaust piles, the card library, and the
+  deck card-select screens.
+- **Left at normal size:** the combat hand, the inspect popup, and the choose-a-card,
+  card-reward, unlock, shop, and card-bundle screens.
+
+It's a Godot + C# + Harmony rewrite of the original STS1 DeckView mod (Java + ModTheSpire),
+built on STS2's own mod loader — nothing from the game is bundled.
 
 ## How it works
 
@@ -72,17 +81,19 @@ A/B check: launch with `--nomods` to see vanilla for comparison.
 
 ## Status / caveats
 
-- **Not yet built or tested in-game.** Written against the decompiled build **v0.103.3**
-  (`../sts2-run-comparison/tools/decompiled/sts2`). If your installed build differs,
-  re-verify the member names below before trusting it.
-- Member names this depends on (re-check after game updates):
+- **Built against the game's own `v0.108.0` assemblies and confirmed working in-game** — the
+  deck view shrinks, hover still zooms, and no card opens stuck-large. Pinned to `v0.108.0`
+  via `TargetGameVersion` in `DeckViewMod.cs` and `min_game_version` in `manifest.json`; it
+  refuses to patch on any other version. (The patch logic was originally written against a
+  `v0.103.3` decompile, then built and verified on `v0.108.0`.)
+- Member names it depends on — re-check and rebuild after any game update:
   `NCardGrid.ConnectSignals`, private field `NCardGrid._cardSize`,
   `NCardGrid.CardPadding` getter, `NCardHolder.SmallScale` getter, and that
   `NGridCardHolder` does not override `SmallScale`.
-  Hover reconcile adds: `NCardGrid._Process`, `NCardGrid.CurrentlyDisplayedCardHolders`,
+  The hover reconcile also uses: `NCardGrid._Process`, `NCardGrid.CurrentlyDisplayedCardHolders`,
   `NGridCardHolder.Create`, `NControllerManager.IsUsingController`, and the private fields
   `NCardHolder._isHovered` / `_isFocused` / `_hoverTween` and `NClickableControl._isHovered`.
-  If any of those private fields are renamed, the reconcile self-disables (logged on load)
-  and falls back to vanilla behavior rather than crashing — a card may then open enlarged.
-- `min_game_version` in `manifest.json` is set to `0.103.3`; bump it to match the build
-  you compile against.
+  If one of those private fields is renamed, the reconcile self-disables (logged on load) and
+  falls back to vanilla behavior rather than crashing — a card may then open enlarged again.
+- To support a newer game build: rebuild against its `sts2.dll`, then bump `TargetGameVersion`
+  and `manifest.json`'s `min_game_version` / name to that version.
