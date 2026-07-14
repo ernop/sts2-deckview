@@ -10,6 +10,7 @@ using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
+using MegaCrit.Sts2.Core.Nodes.HoverTips;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 using MegaCrit.Sts2.Core.Nodes.Screens.Timeline.UnlockScreens;
 
@@ -228,6 +229,12 @@ internal static class GridHoverGate
         if (HolderHoverTween?.GetValue(holder) is Tween tween && GodotObject.IsInstanceValid(tween))
             tween.Kill();
         holder.Scale = holder.SmallScale; // patched getter -> the shrunk grid size
+
+        // The game's normal unfocus (DoCardHoverEffects(false)) also calls ClearHoverTips();
+        // we bypass that path, so remove this holder's hover-tip popup (keyword tips AND the
+        // related-card previews) too — otherwise a stuck card shrinks but its popped cards
+        // stay floating. Keyed on the holder, matching NCardHolder.CreateHoverTips(this).
+        NHoverTipSet.Remove(holder);
     }
 
     // A few screens reuse NGridCardHolder but lay a handful of cards out in a fixed-spacing

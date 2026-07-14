@@ -33,7 +33,7 @@ more per screen. Two coordinated Harmony patches keep layout and rendering in sy
 | Postfix | `NCardGrid.ConnectSignals` (`_cardSize`) | shrinks the layout cell → more columns/rows, tighter scroll |
 | Postfix | `NCardHolder.SmallScale` getter, guarded to `NGridCardHolder` | shrinks the *rendered* grid card to match |
 | Postfix | `NCardGrid.CardPadding` getter | tighter spacing between cards |
-| Postfix | `NCardGrid._Process` | each frame, snap any enlarged card the mouse isn't really over back to small |
+| Postfix | `NCardGrid._Process` | each frame, snap any enlarged card the mouse isn't really over back to small (and dismiss its hover-tip / related-card popup) |
 | Postfix | `NGridCardHolder.Create` | clear stale `_isHovered`/`_isFocused` on pooled reuse |
 
 ### Why the hover reconcile (the "one card opens too big" fix)
@@ -49,9 +49,11 @@ so the hitbox's `_isHovered` stays `true` and nothing shrinks it back. (Trusting
 
 So each frame the grid processes, the mod reconciles against ground truth: for any card
 that's currently enlarged, if the mouse isn't actually inside the card's real (scaled)
-on-screen rect, it's forced back to un-hovered `SmallScale`. A genuine mouse-over still pops
-a card to full size (the game's own `MouseEntered` path), and moving off still plays the
-smooth shrink tween; only the stuck/stale case is snapped. This also covers the deck view
+on-screen rect, it's forced back to un-hovered `SmallScale` — and its hover-tip popup (the
+keyword tips and related-card previews) is dismissed too, since the normal shrink path that
+would clear them is bypassed. A genuine mouse-over still pops a card to full size (the game's
+own `MouseEntered` path), and moving off still plays the smooth shrink tween; only the
+stuck/stale case is snapped. This also covers the deck view
 grab-focusing a default card on open. The reconcile is skipped while a controller is in use,
 so controller focus still enlarges the focused card; the `Create` reset clears stale hover
 flags on pooled holders.
