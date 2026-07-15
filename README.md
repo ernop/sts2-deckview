@@ -17,8 +17,10 @@ mouse over one, which pops it to full size; move off and it shrinks back.
   deck card-select screens.
 - **Left at normal size:** the combat hand, the inspect popup, and the choose-a-card,
   card-reward, unlock, shop, and card-bundle screens.
-- **Toggle any time:** open a card view and press **F9** to flip between shrunk (mini) and
+- **Toggle any time:** open a card view and press **T** to flip between shrunk (mini) and
   normal card size. The choice is saved and persists across runs (`user://deckview.cfg`).
+- **Map overview (first cut):** on the map, press **O** to zoom the whole act out so you can
+  see it top-to-bottom at once; press again to return to the normal view.
 
 It's a Godot + C# + Harmony rewrite of the original STS1 DeckView mod (Java + ModTheSpire),
 built on STS2's own mod loader — nothing from the game is bundled.
@@ -64,22 +66,35 @@ flags on pooled holders.
 
 Every shrink patch is gated on a single mode flag (`DeckModeController.MiniEnabled`), loaded
 from and saved to `user://deckview.cfg`, so your choice survives across runs (default: mini).
-Press **F9** while a card grid is on screen to flip it. Because the layout cell size
+Press **T** while a card grid is on screen to flip it. Because the layout cell size
 (`_cardSize`) is only computed once in `ConnectSignals`, a live toggle can't just change the
 render scale — it would leave columns/scroll out of sync. So the mod records each grid's
 vanilla base size at connect time and, on toggle, rewrites `_cardSize` from that (× the mode
 factor) and flags the grid for reinit; the grid then rebuilds (`InitGrid`) with size, padding,
 and rendered scale all in agreement — a clean, complete swap with no half-state.
 
-(F9 rather than Shift+D: `D` also drives the deck-open action and a polled hotkey can't stop
-that key from reaching the game, so a `D`-based combo would fight it. Change `ToggleDeckModeKey`
-in `DeckViewMod.cs` to taste.)
+(The toggle key is *read* each frame, not consumed — so if it were also bound to something on
+that screen, both would happen; it can't break the other function. `T` isn't a known
+deck-screen binding. Change `ToggleDeckModeKey` in `DeckViewMod.cs` if it clashes.)
+
+### Map overview (first cut)
+
+Press **O** on the map to zoom the whole act out so it fits on screen at once, again to
+return. The entire map (points, paths, marker, drawings) lives under one node
+(`_mapContainer`); the overview computes the bounding box of the live map points, scales that
+node down to fit the viewport (`MapOverviewFitFraction`, default 90%), and pins it centered,
+bypassing the normal vertical scroll. Points shrink but stay clickable. It's session-only
+(resets on restart) and deliberately a rough first version — the point is to make the
+zoomed-out layout *visible* so it can be refined. The poll runs from `NMapScreen._Process`,
+which isn't focus-gated, so `O` works regardless of what holds keyboard focus.
 
 Tunables are constants at the top of `DeckViewMod.cs`:
 
 - `CardScaleFactor` (default `0.6`) — 0.6 ≈ the STS1 mod's "60% of vanilla" look. Lower = smaller.
 - `CardPadding` (default `24`) — vanilla is `40`. Set to `40` to keep vanilla spacing.
-- `ToggleDeckModeKey` (default `F9`) — the mini/large toggle key.
+- `ToggleDeckModeKey` (default `T`) — the mini/large toggle key.
+- `ToggleMapOverviewKey` (default `O`) — the map overview toggle key.
+- `MapOverviewFitFraction` (default `0.9`) — how much of the viewport the whole map fills.
 
 ## Requirements
 
@@ -118,6 +133,8 @@ A/B check: launch with `--nomods` to see vanilla for comparison.
   `NCardHolder._isHovered` / `_isFocused` / `_hoverTween` and `NClickableControl._isHovered`.
   The mini/large toggle also uses: `NCardGrid._ExitTree` and the private fields
   `NCardGrid._cardSize` / `_needsReinit`.
+  The map overview also uses: `NMapScreen._Process` and the private fields
+  `NMapScreen._mapContainer` / `_points` / `_mapPointDictionary` / `_targetDragPos`.
   If one of those private fields is renamed, the reconcile self-disables (logged on load) and
   falls back to vanilla behavior rather than crashing — a card may then open enlarged again.
 - To support a newer game build: rebuild against its `sts2.dll`, then bump `TargetGameVersion`

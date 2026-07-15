@@ -13,6 +13,7 @@ using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 using MegaCrit.Sts2.Core.Nodes.HoverTips;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
+using MegaCrit.Sts2.Core.Nodes.Screens.Map;
 using MegaCrit.Sts2.Core.Nodes.Screens.Timeline.UnlockScreens;
 
 namespace DeckView;
@@ -47,11 +48,19 @@ public static class DeckViewMod
     // columns/rows. Set equal to 40f to keep vanilla spacing.
     public const float CardPadding = 24f;
 
-    // Hotkey to toggle mini <-> large card mode. Polled while a card grid is on screen
+    // Hotkey to toggle mini <-> large card mode. Checked while a card grid is on screen
     // (deck view, library, card-select), so open the deck and press it to flip live.
-    // F9 is used instead of Shift+D because D also drives the deck-open action and a poll
-    // can't stop that key from reaching the game; F9 is conflict-free. Change to taste.
-    public const Key ToggleDeckModeKey = Key.F9;
+    // NOTE: this is a plain key (no modifier) because the key is *read*, not consumed —
+    // if it happens to also be bound to something on that screen, both would fire. T isn't
+    // a known deck-screen binding; change here if it clashes.
+    public const Key ToggleDeckModeKey = Key.T;
+
+    // Hotkey to toggle the whole-act map overview (zoom out to see the entire map). Checked
+    // while the map screen is open. O = "overview". Change to taste.
+    public const Key ToggleMapOverviewKey = Key.O;
+
+    // Overview fits the map into this fraction of the viewport (0.9 = 90%, small margin).
+    public const float MapOverviewFitFraction = 0.9f;
 
     // DeckView was built and tested against this game version. It patches internal names
     // (methods + private fields) that MegaCrit can rename between builds, so this is the
@@ -109,6 +118,7 @@ public static class DeckViewMod
             ("NCardGrid.CardPadding", AccessTools.PropertyGetter(typeof(NCardGrid), "CardPadding") != null),
             ("NCardGrid._Process", AccessTools.Method(typeof(NCardGrid), "_Process") != null),
             ("NCardGrid._ExitTree", AccessTools.Method(typeof(NCardGrid), "_ExitTree") != null),
+            ("NMapScreen._Process", AccessTools.Method(typeof(NMapScreen), "_Process") != null),
             ("NGridCardHolder.Create", AccessTools.Method(typeof(NGridCardHolder), "Create") != null),
             ("NCardGrid.CurrentlyDisplayedCardHolders",
                 AccessTools.PropertyGetter(typeof(NCardGrid), "CurrentlyDisplayedCardHolders") != null),
@@ -418,4 +428,106 @@ internal static class Create_Reset_Patch
         if (__result != null && GridHoverGate.Viable)
             GridHoverGate.ForceUnhover(__result);
     }
+}
+
+// --- Map overview: zoom the whole act map out so it fits on screen at once --------------
+//
+// FIRST CUT — the goal here is to *see* the whole map so we can iterate on the layout. The
+// whole map (points + paths + marker + drawings) lives under one node, `_mapContainer`
+// ("TheMap"); the screen normally just slides it vertically between fixed scroll limits.
+// This scales that node down to fit the map's bounding box into the viewport and pins it
+// centered, so top-to-bottom is visible at once. Toggle with ToggleMapOverviewKey while the
+// map is open. Session-only (resets on game restart) — deliberately simple while we tune it.
+//
+// It computes the bounds from the live map points each frame, so it adapts to any act size.
+// Everything is null-guarded (Available); if a field name moved it simply does nothing.
+internal static class MapOverviewController
+{
+    private static readonly FieldInfo? MapContainerField = AccessTools.Field(typeof(NMapScreen), "_mapContainer");
+    private static readonly FieldInfo? PointsField = AccessTools.Field(typeof(NMapScreen), "_points");
+    private static readonly FieldInfo? PointDictField = AccessTools.Field(typeof(NMapScreen), "_mapPointDictionary");
+    private static readonly FieldInfo? TargetDragField = AccessTools.Field(typeof(NMapScreen), "_targetDragPos");
+
+    private static bool Available => MapContainerField != null && PointDictField != null;
+
+    private static bool _enabled;
+    private static bool _keyWasDown;
+
+    internal static void Tick(NMapScreen screen)
+    {
+        if (!Available || !screen.IsVisibleInTree())
+            return;
+
+        bool down = Input.IsKeyPressed(DeckViewMod.ToggleMapOverviewKey);
+        if (down && !_keyWasDown)
+        {
+            _enabled = !_enabled;
+            Log.Info($"[DeckView] map overview {(_enabled ? "on" : "off")}");
+            if (!_enabled)
+                Restore(screen);
+        }
+        _keyWasDown = down;
+
+        if (_enabled)
+            Apply(screen);
+    }
+
+    private static void Apply(NMapScreen screen)
+    {
+        if (MapContainerField!.GetValue(screen) is not Control map)
+            return;
+
+        // Bounding box of all map points, in _mapContainer-local space. Points live under
+        // `_points` (a child of _mapContainer), so add that child's offset.
+        Vector2 pointsOffset = (PointsField?.GetValue(screen) as Control)?.Position ?? Vector2.Zero;
+        if (PointDictField!.GetValue(screen) is not System.Collections.IDictionary dict || dict.Count == 0)
+            return;
+
+        float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+        foreach (object? value in dict.Values)
+        {
+            if (value is not Control pt || !GodotObject.IsInstanceValid(pt))
+                continue;
+            Vector2 topLeft = pointsOffset + pt.Position;
+            Vector2 size = pt.Size * pt.Scale;
+            minX = Math.Min(minX, topLeft.X);
+            minY = Math.Min(minY, topLeft.Y);
+            maxX = Math.Max(maxX, topLeft.X + size.X);
+            maxY = Math.Max(maxY, topLeft.Y + size.Y);
+        }
+
+        float contentW = maxX - minX, contentH = maxY - minY;
+        if (contentW <= 0f || contentH <= 0f)
+            return;
+
+        Vector2 viewport = screen.GetViewportRect().Size;
+        float fit = DeckViewMod.MapOverviewFitFraction;
+        float scale = Math.Min(viewport.X * fit / contentW, viewport.Y * fit / contentH);
+        scale = Math.Clamp(scale, 0.1f, 1f); // only ever zoom out, never past 1:1
+
+        // Place the content's center at the viewport's center.
+        Vector2 contentCenter = new Vector2((minX + maxX) * 0.5f, (minY + maxY) * 0.5f);
+        map.Scale = new Vector2(scale, scale);
+        map.Position = viewport * 0.5f - contentCenter * scale;
+    }
+
+    private static void Restore(NMapScreen screen)
+    {
+        if (MapContainerField!.GetValue(screen) is Control map)
+        {
+            map.Scale = Vector2.One;
+            map.Position = Vector2.Zero;
+        }
+        // Reset the scroll target so the normal view doesn't lerp toward a stale overview pos.
+        TargetDragField?.SetValue(screen, Vector2.Zero);
+    }
+}
+
+// Drive the map overview each frame the map screen processes. _Process isn't focus-gated
+// (unlike the arrow-key scroll path), so the overview toggle works regardless of what has
+// keyboard focus on the map.
+[HarmonyPatch(typeof(NMapScreen), "_Process")]
+internal static class NMapScreen_Process_Patch
+{
+    private static void Postfix(NMapScreen __instance) => MapOverviewController.Tick(__instance);
 }
