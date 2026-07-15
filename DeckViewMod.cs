@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using Godot;
@@ -38,12 +39,19 @@ namespace DeckView;
 public static class DeckViewMod
 {
     // 0.6 => cards render at 60% of the vanilla deck-view size, matching the STS1 mod.
-    // Lower = smaller cards / more columns. Tune to taste.
+    // Lower = smaller cards / more columns. Tune to taste. (Only applied in mini mode —
+    // see DeckModeController; toggle with the hotkey below, state persists across runs.)
     public const float CardScaleFactor = 0.6f;
 
     // Vanilla NCardGrid.CardPadding is a constant 40f. Tighter spacing packs in more
     // columns/rows. Set equal to 40f to keep vanilla spacing.
     public const float CardPadding = 24f;
+
+    // Hotkey to toggle mini <-> large card mode. Polled while a card grid is on screen
+    // (deck view, library, card-select), so open the deck and press it to flip live.
+    // F9 is used instead of Shift+D because D also drives the deck-open action and a poll
+    // can't stop that key from reaching the game; F9 is conflict-free. Change to taste.
+    public const Key ToggleDeckModeKey = Key.F9;
 
     // DeckView was built and tested against this game version. It patches internal names
     // (methods + private fields) that MegaCrit can rename between builds, so this is the
@@ -100,12 +108,122 @@ public static class DeckViewMod
             ("NCardHolder.SmallScale", AccessTools.PropertyGetter(typeof(NCardHolder), "SmallScale") != null),
             ("NCardGrid.CardPadding", AccessTools.PropertyGetter(typeof(NCardGrid), "CardPadding") != null),
             ("NCardGrid._Process", AccessTools.Method(typeof(NCardGrid), "_Process") != null),
+            ("NCardGrid._ExitTree", AccessTools.Method(typeof(NCardGrid), "_ExitTree") != null),
             ("NGridCardHolder.Create", AccessTools.Method(typeof(NGridCardHolder), "Create") != null),
             ("NCardGrid.CurrentlyDisplayedCardHolders",
                 AccessTools.PropertyGetter(typeof(NCardGrid), "CurrentlyDisplayedCardHolders") != null),
         };
         missing = string.Join(", ", hooks.Where(h => !h.ok).Select(h => h.name));
         return missing.Length == 0;
+    }
+}
+
+// --- Mini/large toggle: persistent state + hotkey + clean live swap -------------------
+//
+// The shrink is no longer unconditional: every shrink patch is gated on
+// DeckModeController.MiniEnabled, whose value is loaded from (and saved to) a small config
+// file so it survives across runs. Default is mini (matches the mod's original behavior).
+//
+// Toggling has to be a *complete* swap, not a half-state: the layout cell size (_cardSize)
+// determines Columns / positions / scroll and is only computed in ConnectSignals, which
+// runs once. So on toggle we set each live grid's _cardSize from the vanilla base we
+// recorded (times the mode factor) and flag it for reinit — the grid then rebuilds itself
+// (InitGrid) next frame with the new size, padding, and rendered scale all in agreement.
+internal static class DeckViewConfig
+{
+    private const string Path = "user://deckview.cfg";
+
+    private static bool _loaded;
+    private static bool _miniDeck = true; // default: shrink (original behavior)
+
+    internal static bool MiniDeck
+    {
+        get { EnsureLoaded(); return _miniDeck; }
+        set
+        {
+            EnsureLoaded();
+            if (_miniDeck == value) return;
+            _miniDeck = value;
+            Save();
+        }
+    }
+
+    private static void EnsureLoaded()
+    {
+        if (_loaded) return;
+        _loaded = true;
+        try
+        {
+            var cfg = new ConfigFile();
+            if (cfg.Load(Path) == Error.Ok)
+                _miniDeck = cfg.GetValue("deck", "mini", true).AsBool();
+        }
+        catch (Exception e)
+        {
+            Log.Error($"[DeckView] could not read {Path}, using default (mini). {e.Message}");
+        }
+    }
+
+    private static void Save()
+    {
+        try
+        {
+            var cfg = new ConfigFile();
+            cfg.Load(Path); // preserve any other keys; ignore "file missing"
+            cfg.SetValue("deck", "mini", _miniDeck);
+            cfg.Save(Path);
+        }
+        catch (Exception e)
+        {
+            Log.Error($"[DeckView] could not save {Path}. {e.Message}");
+        }
+    }
+}
+
+internal static class DeckModeController
+{
+    private static readonly FieldInfo? CardSizeField = AccessTools.Field(typeof(NCardGrid), "_cardSize");
+    private static readonly FieldInfo? NeedsReinitField = AccessTools.Field(typeof(NCardGrid), "_needsReinit");
+
+    // Live grids -> the vanilla (un-shrunk) _cardSize captured at ConnectSignals time.
+    private static readonly Dictionary<NCardGrid, Vector2> _grids = new();
+
+    private static bool _keyWasDown;
+
+    internal static bool MiniEnabled => DeckViewConfig.MiniDeck;
+
+    internal static void Register(NCardGrid grid, Vector2 vanillaCardSize) => _grids[grid] = vanillaCardSize;
+
+    internal static void Unregister(NCardGrid grid) => _grids.Remove(grid);
+
+    // Edge-detected hotkey poll (called each frame a card grid processes).
+    internal static void PollHotkey()
+    {
+        bool down = Input.IsKeyPressed(DeckViewMod.ToggleDeckModeKey);
+        if (down && !_keyWasDown)
+            Toggle();
+        _keyWasDown = down;
+    }
+
+    internal static void Toggle()
+    {
+        DeckViewConfig.MiniDeck = !DeckViewConfig.MiniDeck;
+        float factor = MiniEnabled ? DeckViewMod.CardScaleFactor : 1f;
+        Log.Info($"[DeckView] {(MiniEnabled ? "mini" : "large")} deck mode");
+
+        foreach (KeyValuePair<NCardGrid, Vector2> kv in _grids.ToArray())
+        {
+            NCardGrid grid = kv.Key;
+            if (!GodotObject.IsInstanceValid(grid))
+            {
+                _grids.Remove(grid);
+                continue;
+            }
+            // Resize the layout cell from the recorded vanilla base, then let the grid rebuild
+            // itself so columns/positions/scroll and the rendered card scale all flip together.
+            CardSizeField?.SetValue(grid, kv.Value * factor);
+            NeedsReinitField?.SetValue(grid, true);
+        }
     }
 }
 
@@ -117,11 +235,22 @@ public static class DeckViewMod
 internal static class NCardGrid_ConnectSignals_Patch
 {
     // Harmony injects the private field `_cardSize` as the parameter `____cardSize`
-    // (three-underscore prefix + the field name, which itself starts with '_').
-    private static void Postfix(ref Vector2 ____cardSize)
+    // (three-underscore prefix + the field name, which itself starts with '_'). At postfix
+    // entry it holds the vanilla base size; we record that (so a later live toggle can
+    // recompute from it without re-running ConnectSignals) and shrink only in mini mode.
+    private static void Postfix(NCardGrid __instance, ref Vector2 ____cardSize)
     {
-        ____cardSize *= DeckViewMod.CardScaleFactor;
+        DeckModeController.Register(__instance, ____cardSize);
+        if (DeckModeController.MiniEnabled)
+            ____cardSize *= DeckViewMod.CardScaleFactor;
     }
+}
+
+// Drop a grid from the toggle registry when it leaves the tree.
+[HarmonyPatch(typeof(NCardGrid), "_ExitTree")]
+internal static class NCardGrid_ExitTree_Patch
+{
+    private static void Postfix(NCardGrid __instance) => DeckModeController.Unregister(__instance);
 }
 
 // Shrink the *rendered* scale of grid cards to match the smaller layout cells.
@@ -139,7 +268,7 @@ internal static class NCardHolder_SmallScale_Patch
 {
     private static void Postfix(NCardHolder __instance, ref Vector2 __result)
     {
-        if (__instance is NGridCardHolder && !GridHoverGate.IsInFixedCardRow(__instance))
+        if (DeckModeController.MiniEnabled && __instance is NGridCardHolder && !GridHoverGate.IsInFixedCardRow(__instance))
             __result *= DeckViewMod.CardScaleFactor;
     }
 }
@@ -150,7 +279,8 @@ internal static class NCardGrid_CardPadding_Patch
 {
     private static void Postfix(ref float __result)
     {
-        __result = DeckViewMod.CardPadding;
+        if (DeckModeController.MiniEnabled)
+            __result = DeckViewMod.CardPadding;
     }
 }
 
@@ -259,6 +389,9 @@ internal static class NCardGrid_Process_Reconcile_Patch
 {
     private static void Postfix(NCardGrid __instance)
     {
+        DeckModeController.PollHotkey();            // always — so the hotkey works in either mode
+        if (!DeckModeController.MiniEnabled)        // reconcile is only meaningful when shrinking
+            return;
         if (!GridHoverGate.Viable || GridHoverGate.UsingController())
             return;
         foreach (NGridCardHolder holder in __instance.CurrentlyDisplayedCardHolders)

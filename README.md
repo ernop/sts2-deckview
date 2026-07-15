@@ -17,6 +17,8 @@ mouse over one, which pops it to full size; move off and it shrinks back.
   deck card-select screens.
 - **Left at normal size:** the combat hand, the inspect popup, and the choose-a-card,
   card-reward, unlock, shop, and card-bundle screens.
+- **Toggle any time:** open a card view and press **F9** to flip between shrunk (mini) and
+  normal card size. The choice is saved and persists across runs (`user://deckview.cfg`).
 
 It's a Godot + C# + Harmony rewrite of the original STS1 DeckView mod (Java + ModTheSpire),
 built on STS2's own mod loader — nothing from the game is bundled.
@@ -58,10 +60,26 @@ grab-focusing a default card on open. The reconcile is skipped while a controlle
 so controller focus still enlarges the focused card; the `Create` reset clears stale hover
 flags on pooled holders.
 
+### Mini / large toggle (persistent)
+
+Every shrink patch is gated on a single mode flag (`DeckModeController.MiniEnabled`), loaded
+from and saved to `user://deckview.cfg`, so your choice survives across runs (default: mini).
+Press **F9** while a card grid is on screen to flip it. Because the layout cell size
+(`_cardSize`) is only computed once in `ConnectSignals`, a live toggle can't just change the
+render scale — it would leave columns/scroll out of sync. So the mod records each grid's
+vanilla base size at connect time and, on toggle, rewrites `_cardSize` from that (× the mode
+factor) and flags the grid for reinit; the grid then rebuilds (`InitGrid`) with size, padding,
+and rendered scale all in agreement — a clean, complete swap with no half-state.
+
+(F9 rather than Shift+D: `D` also drives the deck-open action and a polled hotkey can't stop
+that key from reaching the game, so a `D`-based combo would fight it. Change `ToggleDeckModeKey`
+in `DeckViewMod.cs` to taste.)
+
 Tunables are constants at the top of `DeckViewMod.cs`:
 
 - `CardScaleFactor` (default `0.6`) — 0.6 ≈ the STS1 mod's "60% of vanilla" look. Lower = smaller.
 - `CardPadding` (default `24`) — vanilla is `40`. Set to `40` to keep vanilla spacing.
+- `ToggleDeckModeKey` (default `F9`) — the mini/large toggle key.
 
 ## Requirements
 
@@ -98,6 +116,8 @@ A/B check: launch with `--nomods` to see vanilla for comparison.
   The hover reconcile also uses: `NCardGrid._Process`, `NCardGrid.CurrentlyDisplayedCardHolders`,
   `NGridCardHolder.Create`, `NControllerManager.IsUsingController`, and the private fields
   `NCardHolder._isHovered` / `_isFocused` / `_hoverTween` and `NClickableControl._isHovered`.
+  The mini/large toggle also uses: `NCardGrid._ExitTree` and the private fields
+  `NCardGrid._cardSize` / `_needsReinit`.
   If one of those private fields is renamed, the reconcile self-disables (logged on load) and
   falls back to vanilla behavior rather than crashing — a card may then open enlarged again.
 - To support a newer game build: rebuild against its `sts2.dll`, then bump `TargetGameVersion`
