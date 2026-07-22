@@ -1,10 +1,21 @@
-# DeckView — smaller deck-view cards for Slay the Spire 2
+# DeckView — compact deck views + a glanceable map for Slay the Spire 2
 
-> **Built and tested for Slay the Spire 2 `v0.108.0`.** On other versions it doesn't blindly
-> switch off: at load it checks that the game internals it hooks are still present and patches
-> anyway if they are (minor updates usually don't move them). If something it needs is missing
-> — or patching fails — it backs out and leaves the UI vanilla rather than crashing. Either
-> way a game update can't break your run; worst case you get stock card sizes until a rebuild.
+Two quality-of-life features for STS2: **mini-cards** (shrink deck-like screens so the whole
+deck fits at a glance) and an **alternate flat map** (the whole act laid out left→right on one
+screen, provably the same map — just compacted).
+
+| Flat map page | Mini-cards deck view |
+|---|---|
+| ![Flat map](docs/images/flat-map.png) | ![Mini-cards](docs/images/deck-view.png) |
+
+> **Built and tested for Slay the Spire 2 `v0.109.0`.**
+>
+> **Error policy: work or crash — never degrade.** DeckView hooks internal game members by
+> name. If a game update renames or moves one, DeckView does **not** quietly disable itself or
+> "fall back to vanilla" — it throws and crashes loudly, pointing at the broken member. Silent
+> fallbacks hide exactly the breakage you need to see. So on an untested version you get one of
+> two outcomes: it works, or it crashes with a clear error to fix. (Reflected members resolve at
+> load and throw immediately if absent; patching is never wrapped in a swallow-and-continue.)
 
 ## What it's for
 
@@ -17,10 +28,17 @@ mouse over one, which pops it to full size; move off and it shrinks back.
   deck card-select screens.
 - **Left at normal size:** the combat hand, the inspect popup, and the choose-a-card,
   card-reward, unlock, shop, and card-bundle screens.
-- **Toggle any time:** open a card view and press **T** to flip between shrunk (mini) and
-  normal card size. The choice is saved and persists across runs (`user://deckview.cfg`).
-- **Map overview (first cut):** on the map, press **O** to zoom the whole act out so you can
-  see it top-to-bottom at once; press again to return to the normal view.
+- **Toggle any time:** open a card view and either click the on-screen **Mini-cards** toggle
+  (next to *View upgrades*) or press **T**. The choice is saved and persists across runs
+  (`user://deckview.cfg`).
+- **Flat map:** a from-scratch, whole-act-on-one-screen view of the map, laid out left→right
+  and vertically compacted, rendered as a real top-level page (its own top bar, ESC/back,
+  controller routing). Every room shows the game's real icon on a color-coded circle; your
+  current spot, your legal next moves (relic-aware, incl. Wing Boots), your past route, and the
+  rooms you can no longer reach are all called out. Two checkboxes — **Flat map** and
+  **Compress** — configure how it looks; **M** (from anywhere) opens/closes the map in that
+  configured style, **O** flips flat↔classic while the map is up. It only ever *reads* the live
+  map — it never changes your run.
 
 It's a Godot + C# + Harmony rewrite of the original STS1 DeckView mod (Java + ModTheSpire),
 built on STS2's own mod loader — nothing from the game is bundled.
@@ -53,48 +71,88 @@ so the hitbox's `_isHovered` stays `true` and nothing shrinks it back. (Trusting
 
 So each frame the grid processes, the mod reconciles against ground truth: for any card
 that's currently enlarged, if the mouse isn't actually inside the card's real (scaled)
-on-screen rect, it's forced back to un-hovered `SmallScale` — and its hover-tip popup (the
-keyword tips and related-card previews) is dismissed too, since the normal shrink path that
-would clear them is bypassed. A genuine mouse-over still pops a card to full size (the game's
-own `MouseEntered` path), and moving off still plays the smooth shrink tween; only the
-stuck/stale case is snapped. This also covers the deck view
-grab-focusing a default card on open. The reconcile is skipped while a controller is in use,
-so controller focus still enlarges the focused card; the `Create` reset clears stale hover
-flags on pooled holders.
+on-screen rect, it clears the stale hitbox `_isHovered` bit (the root cause) and then drives
+the game's **own** un-hover path — `RefreshFocusState()` → `DoCardHoverEffects(false)` — rather
+than hand-rolling the shrink. That matters for the popup: the game only dismisses a card's
+hover tip inside `DoCardHoverEffects(false)` (via `ClearHoverTips()` → `NHoverTipSet.Remove`),
+which frees the *one* tip set that holds both the keyword tips and the related-card previews.
+Driving the real path makes our dismissal byte-for-byte identical to vanilla, so the popup no
+longer lingers after a card shrinks; the normal smooth shrink tween runs too. A genuine
+mouse-over still pops a card to full size (the game's own `MouseEntered` path); only the
+stuck/stale case is corrected. This also covers the deck view grab-focusing a default card on
+open. The reconcile is skipped while a controller is in use, so controller focus still
+enlarges the focused card; the `Create` reset does a lightweight flag scrub on pooled holders
+(no tween, since a freshly-created holder may not be in the tree yet).
 
 ### Mini / large toggle (persistent)
 
 Every shrink patch is gated on a single mode flag (`DeckModeController.MiniEnabled`), loaded
 from and saved to `user://deckview.cfg`, so your choice survives across runs (default: mini).
-Press **T** while a card grid is on screen to flip it. Because the layout cell size
-(`_cardSize`) is only computed once in `ConnectSignals`, a live toggle can't just change the
-render scale — it would leave columns/scroll out of sync. So the mod records each grid's
-vanilla base size at connect time and, on toggle, rewrites `_cardSize` from that (× the mode
-factor) and flags the grid for reinit; the grid then rebuilds (`InitGrid`) with size, padding,
-and rendered scale all in agreement — a clean, complete swap with no half-state.
+Flip it two ways, both routed through `DeckModeController.SetMini` so they stay in agreement:
+the **T** hotkey, or an on-screen **Mini-cards** tickbox. The tickbox is a self-drawn
+`ToggleSwitch` using the game's own checkbox art (`ui_atlas.sprites/checkbox_*`) and Kreon font,
+sized to match the adjacent *View upgrades* control (cloning the game's `NTickbox` via
+`Node.Duplicate` was tried first but NRE'd — its `%TickboxVisuals` scene-unique names are owned
+by the screen). It's wired to `SetMini` and seeded to the current mode when the screen connects.
+Because the layout cell size (`_cardSize`)
+is only computed once in `ConnectSignals`, a live toggle can't just change the render scale — it
+would leave columns/scroll out of sync. So the mod records each grid's vanilla base size at
+connect time and, on toggle, rewrites `_cardSize` from that (× the mode factor) and flags the
+grid for reinit; the grid then rebuilds (`InitGrid`) with size, padding, and rendered scale all
+in agreement — a clean, complete swap with no half-state.
 
-(The toggle key is *read* each frame, not consumed — so if it were also bound to something on
-that screen, both would happen; it can't break the other function. `T` isn't a known
-deck-screen binding. Change `ToggleDeckModeKey` in `DeckViewMod.cs` if it clashes.)
+(The hotkey is *read* each frame, not consumed — so if it were also bound to something on that
+screen, both would happen; it can't break the other function. `T` isn't a known deck-screen
+binding. Change `ToggleDeckModeKey` in `DeckViewMod.cs` if it clashes. The tickbox's exact
+placement lives in the game's `.tscn`, not the DLL, so its position offset (`MiniCardsToggle_Patch.ToggleOffset`)
+is a first pass — expect to nudge it once you see it in-game.)
 
-### Map overview (first cut)
+### Flat map
 
-Press **O** on the map to zoom the whole act out so it fits on screen at once, again to
-return. The entire map (points, paths, marker, drawings) lives under one node
-(`_mapContainer`); the overview computes the bounding box of the live map points, scales that
-node down to fit the viewport (`MapOverviewFitFraction`, default 90%), and pins it centered,
-bypassing the normal vertical scroll. Points shrink but stay clickable. It's session-only
-(resets on restart) and deliberately a rough first version — the point is to make the
-zoomed-out layout *visible* so it can be refined. The poll runs from `NMapScreen._Process`,
-which isn't focus-gated, so `O` works regardless of what holds keyboard focus.
+The flat map is a real **capstone screen** (`MiniMapScreen : ICapstoneScreen`, opened via
+`NCapstoneContainer`), exactly like the game's own deck-view screen — so it's a top-level page
+that keeps the top bar, dim backstop, combat pause, and native focus/ESC/controller routing.
+(An earlier "zoom the real map out" attempt couldn't work — `NMapScreen._Process` rewrites the
+map container's position every frame and there's no zoom field — and an overlay `Control` isn't
+recognized as the current screen; the capstone route is the clean one. Note also that Godot's
+source generators don't run for this mod, so `_Draw`/`_GuiInput` overrides never fire — the page
+draws via the `Draw` **signal** and takes input via the `gui_input` **signal**.)
+
+It reads live state straight off `NMapScreen` — each point's coord, `MapPointType`, travel
+`State`, the real room-icon texture, edges (`MapPoint.Children`), plus the run's
+`CurrentMapCoord`, act, and `IsTravelEnabled` — and never mutates any of it. Layout runs the
+act's graph through a pure compaction pass (see below) and draws each room as a color-coded
+circle with the game's own icon on top, floors along X and the compacted lane along Y.
+
+Node states are all called out at a glance: your **current** spot (blue ring + the game's own
+"you are here" arrow); your **legal next moves** (bright halos — but only once the current room
+is finished, and using the game's own relic-aware travelable set so **Wing Boots** correctly
+lights up the whole next row); your **past route** (kept in color but dimmed, and a visited `?`
+adopts the room it turned out to be); and rooms you **can no longer reach** (greyed, edges
+faded). Click a highlighted room to travel there via the game's own selection path.
+
+**Compaction (the interesting part).** The whole act is squeezed onto one screen without ever
+changing which rooms connect. The key invariant: every step preserves each floor's *column
+order*, so the crossing count is identical to the game's — compaction can only reassign display
+lanes, never scramble connectivity or overlap two rooms. It's proven offline in `layout/`: a
+pure `MapLayout` algorithm + an invariant checker + metrics + a 500-map property test + captured
+real levels + an ASCII viz tool. Typical result: ~27% fewer lanes, ~28% shorter edges, 0
+crossings added. The **Compress** checkbox shows compacted (on) vs. raw 1:1 with the game's
+columns (off), so you can see the compaction changed nothing but spacing.
+
+**Keys / state.** The two checkboxes (**Flat map**, **Compress**) are the single source of truth
+for how the map looks and are saved across runs. **M** is the one global shortcut — from any
+screen it toggles the map's visibility, opening it in the configured style; ESC/back and M both
+leave the *whole* map back to the prior view (the flat page is never a sub-layer you fall back
+from). **O** works only while a map is up, flipping flat↔classic in place.
 
 Tunables are constants at the top of `DeckViewMod.cs`:
 
 - `CardScaleFactor` (default `0.6`) — 0.6 ≈ the STS1 mod's "60% of vanilla" look. Lower = smaller.
 - `CardPadding` (default `24`) — vanilla is `40`. Set to `40` to keep vanilla spacing.
-- `ToggleDeckModeKey` (default `T`) — the mini/large toggle key.
-- `ToggleMapOverviewKey` (default `O`) — the map overview toggle key.
-- `MapOverviewFitFraction` (default `0.9`) — how much of the viewport the whole map fills.
+- `ToggleDeckModeKey` (default `T`) — the mini/large card toggle key.
+- `ToggleMiniMapKey` (default `O`) — flips flat↔classic while a map is open.
+- `MapKey` (default `M`) — the global open/close-the-map shortcut.
 
 ## Requirements
 
@@ -116,26 +174,37 @@ and `manifest.json` into `…\Slay the Spire 2\mods\deckview\`.
 
 A/B check: launch with `--nomods` to see vanilla for comparison.
 
+See [`DEVELOPMENT.md`](DEVELOPMENT.md) for the full dev setup — how to decompile the game
+(`ilspycmd`), the exact toolchain paths (WSL drives the Windows dotnet SDK), the map data model,
+and the "work or crash" error policy.
+
 ## Status / caveats
 
-- **Built against the game's own `v0.108.0` assemblies and confirmed working in-game** — the
-  deck view shrinks, hover still zooms, and no card opens stuck-large. `TestedGameVersion` in
-  `DeckViewMod.cs` records that build; `min_game_version` in `manifest.json` is the floor. On
-  a newer game version DeckView probes for the members it hooks and patches if they're still
-  there, otherwise backs out to vanilla (see the load behavior above). (The patch logic was
-  originally written against a `v0.103.3` decompile, then built and verified on `v0.108.0`.)
-- Member names it depends on — re-check and rebuild after any game update:
-  `NCardGrid.ConnectSignals`, private field `NCardGrid._cardSize`,
-  `NCardGrid.CardPadding` getter, `NCardHolder.SmallScale` getter, and that
-  `NGridCardHolder` does not override `SmallScale`.
-  The hover reconcile also uses: `NCardGrid._Process`, `NCardGrid.CurrentlyDisplayedCardHolders`,
-  `NGridCardHolder.Create`, `NControllerManager.IsUsingController`, and the private fields
-  `NCardHolder._isHovered` / `_isFocused` / `_hoverTween` and `NClickableControl._isHovered`.
-  The mini/large toggle also uses: `NCardGrid._ExitTree` and the private fields
-  `NCardGrid._cardSize` / `_needsReinit`.
-  The map overview also uses: `NMapScreen._Process` and the private fields
-  `NMapScreen._mapContainer` / `_points` / `_mapPointDictionary` / `_targetDragPos`.
-  If one of those private fields is renamed, the reconcile self-disables (logged on load) and
-  falls back to vanilla behavior rather than crashing — a card may then open enlarged again.
-- To support a newer game build: rebuild against its `sts2.dll`, then bump `TargetGameVersion`
+- **The card shrinking + hover fix were built against the game's own `v0.108.0` assemblies and
+  confirmed working in-game** — the deck view shrinks, hover still zooms, and no card opens
+  stuck-large. `TestedGameVersion` in `DeckViewMod.cs` records that build; `min_game_version` in
+  `manifest.json` is the floor.
+- **The lingering-popup fix, the on-screen *View mini-cards* tickbox, and the compact minimap
+  are newer and compile cleanly against the `v0.108.0` assemblies but still need in-game
+  verification.** Two spots are known first-pass and expected to need tuning once seen:
+  the tickbox's placement (`MiniCardsToggle_Patch.ToggleOffset` — the real parent/position lives
+  in the game `.tscn`, not the DLL) and the minimap's colors/glyphs/layout (in `MiniMapView`).
+- **No graceful degradation (work or crash).** If any hooked member below is renamed/removed by
+  a game update, DeckView throws and crashes loudly rather than disabling a feature or falling
+  back to vanilla — that's intentional (see the policy note at the top). Re-check these and
+  rebuild after any game update:
+  - Cards: `NCardGrid.ConnectSignals`, `NCardGrid._cardSize`, `NCardGrid.CardPadding` getter,
+    `NCardHolder.SmallScale` getter, `NGridCardHolder` not overriding `SmallScale`.
+  - Hover reconcile: `NCardGrid._Process`, `NCardGrid.CurrentlyDisplayedCardHolders`,
+    `NGridCardHolder.Create`, `NCardHolder.RefreshFocusState`, `NControllerManager.IsUsingController`,
+    `NHoverTipSet.Remove`, and private fields `NCardHolder._isHovered` / `_isFocused` /
+    `_hoverTween` and `NClickableControl._isHovered`.
+  - Mini/large toggle: `NCardGrid._ExitTree`, private fields `NCardGrid._cardSize` / `_needsReinit`.
+  - View mini-cards tickbox: `NCardsViewScreen.ConnectSignals`, `NCardsViewScreen._showUpgrades`
+    (`NTickbox`), `NTickbox.IsTicked` / `Toggled`, `MegaLabel.SetTextAutoSize`, scene name
+    `%ViewUpgradesLabel`.
+  - Minimap: `NMapScreen._Process`, private fields `NMapScreen._mapPointDictionary` / `_runState`,
+    `RunState.CurrentMapCoord`, and on the data model `MapPoint.coord` / `PointType` / `Children`,
+    `NMapPoint.Point` / `State`, enums `MapPointType` / `MapPointState`.
+- To support a newer game build: rebuild against its `sts2.dll`, then bump `TestedGameVersion`
   and `manifest.json`'s `min_game_version` / name to that version.

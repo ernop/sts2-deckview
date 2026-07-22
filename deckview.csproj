@@ -23,6 +23,14 @@
     <Sts2Data Condition="'$(Sts2Data)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64</Sts2Data>
   </PropertyGroup>
 
+  <!-- The layout/ folder is a separate, game-independent project (pure algorithm + offline
+       tests). Keep it out of the mod build; we'll pull in just MapLayout.cs here when we wire it
+       into the minimap. -->
+  <ItemGroup>
+    <Compile Remove="layout/**/*.cs" />
+    <Compile Include="layout/MapLayout.cs" /> <!-- pure algorithm reused by the minimap -->
+  </ItemGroup>
+
   <ItemGroup>
     <!-- Game + engine + Harmony are provided by the running game; reference-only, never copied. -->
     <Reference Include="sts2">
