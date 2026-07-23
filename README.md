@@ -1,8 +1,8 @@
-# DeckView — compact deck views + a glanceable map for Slay the Spire 2
+# DeckView — zoomed-out deck and map views for Slay the Spire 2
 
-Two quality-of-life features for STS2: **mini-cards** (shrink deck-like screens so the whole
-deck fits at a glance) and an **alternate flat map** (the whole act laid out left→right on one
-screen, provably the same map — just compacted).
+DeckView zooms out deck-like screens and provides a clearer, optional whole-act map laid out
+left-to-right. It changes visibility and UI layout only: **it does not alter cards, routes,
+travel rules, saves, combat, rewards, or any other gameplay.**
 
 | Flat map page | Mini-cards deck view |
 |---|---|
@@ -10,12 +10,9 @@ screen, provably the same map — just compacted).
 
 > **Built and tested for Slay the Spire 2 `v0.109.0`.**
 >
-> **Error policy: work or crash — never degrade.** DeckView hooks internal game members by
-> name. If a game update renames or moves one, DeckView does **not** quietly disable itself or
-> "fall back to vanilla" — it throws and crashes loudly, pointing at the broken member. Silent
-> fallbacks hide exactly the breakage you need to see. So on an untested version you get one of
-> two outcomes: it works, or it crashes with a clear error to fix. (Reflected members resolve at
-> load and throw immediately if absent; patching is never wrapped in a swallow-and-continue.)
+> DeckView checks every game hook before enabling. If an STS2 update moves an internal member,
+> DeckView logs the missing hooks, disables itself, and leaves the vanilla UI running. Harmony
+> setup is rolled back if patching fails, so the mod never intentionally leaves a half-patched UI.
 
 ## What it's for
 
@@ -104,8 +101,8 @@ in agreement — a clean, complete swap with no half-state.
 (The hotkey is *read* each frame, not consumed — so if it were also bound to something on that
 screen, both would happen; it can't break the other function. `T` isn't a known deck-screen
 binding. Change `ToggleDeckModeKey` in `DeckViewMod.cs` if it clashes. The tickbox's exact
-placement lives in the game's `.tscn`, not the DLL, so its position offset (`MiniCardsToggle_Patch.ToggleOffset`)
-is a first pass — expect to nudge it once you see it in-game.)
+placement follows the live *View upgrades* control, and it measures that control so its checkbox
+and label sizing match.)
 
 ### Flat map
 
@@ -156,17 +153,33 @@ Tunables are constants at the top of `DeckViewMod.cs`:
 
 ## Requirements
 
-- Slay the Spire 2 installed (default: `C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2`).
-- .NET 9 SDK (`dotnet`) to build.
-- The mod references the game's own `sts2.dll`, `GodotSharp.dll`, and `0Harmony.dll`
-  from `…\Slay the Spire 2\data_sts2_windows_x86_64\` — nothing is bundled.
+- Slay the Spire 2 `v0.109.0`.
+- No gameplay dependencies. DeckView uses the game's built-in mod loader.
 
-## Build & install
+## Install
+
+Download the latest `deckview-…zip` from
+[GitHub Releases](https://github.com/ernop/sts2-deckview/releases), then extract it into the
+game's `mods` directory. The result should be:
+
+```text
+Slay the Spire 2/
+└── mods/
+    └── deckview/
+        ├── deckview.dll
+        └── manifest.json
+```
+
+Launch STS2, enable DeckView in the **Mods** menu, and restart when prompted.
+
+## Build from source
+
+Building requires the .NET 9 SDK and an installed copy of STS2. The project references the
+game-provided `sts2.dll`, `GodotSharp.dll`, and `0Harmony.dll`; none are bundled.
 
 ```powershell
 # from the repo root, on Windows:
 .\scripts\build.ps1 -Install
-# then: launch STS2 -> Mods menu -> enable DeckView -> restart (Godot compiles mods on startup)
 ```
 
 Or manually: `dotnet build deckview.csproj -c Release -o bin`, then copy `bin\deckview.dll`
@@ -176,35 +189,23 @@ A/B check: launch with `--nomods` to see vanilla for comparison.
 
 See [`DEVELOPMENT.md`](DEVELOPMENT.md) for the full dev setup — how to decompile the game
 (`ilspycmd`), the exact toolchain paths (WSL drives the Windows dotnet SDK), the map data model,
-and the "work or crash" error policy.
+compatibility preflight, and release checks.
 
 ## Status / caveats
 
-- **The card shrinking + hover fix were built against the game's own `v0.108.0` assemblies and
-  confirmed working in-game** — the deck view shrinks, hover still zooms, and no card opens
-  stuck-large. `TestedGameVersion` in `DeckViewMod.cs` records that build; `min_game_version` in
-  `manifest.json` is the floor.
-- **The lingering-popup fix, the on-screen *View mini-cards* tickbox, and the compact minimap
-  are newer and compile cleanly against the `v0.108.0` assemblies but still need in-game
-  verification.** Two spots are known first-pass and expected to need tuning once seen:
-  the tickbox's placement (`MiniCardsToggle_Patch.ToggleOffset` — the real parent/position lives
-  in the game `.tscn`, not the DLL) and the minimap's colors/glyphs/layout (in `MiniMapView`).
-- **No graceful degradation (work or crash).** If any hooked member below is renamed/removed by
-  a game update, DeckView throws and crashes loudly rather than disabling a feature or falling
-  back to vanilla — that's intentional (see the policy note at the top). Re-check these and
-  rebuild after any game update:
-  - Cards: `NCardGrid.ConnectSignals`, `NCardGrid._cardSize`, `NCardGrid.CardPadding` getter,
-    `NCardHolder.SmallScale` getter, `NGridCardHolder` not overriding `SmallScale`.
-  - Hover reconcile: `NCardGrid._Process`, `NCardGrid.CurrentlyDisplayedCardHolders`,
-    `NGridCardHolder.Create`, `NCardHolder.RefreshFocusState`, `NControllerManager.IsUsingController`,
-    `NHoverTipSet.Remove`, and private fields `NCardHolder._isHovered` / `_isFocused` /
-    `_hoverTween` and `NClickableControl._isHovered`.
-  - Mini/large toggle: `NCardGrid._ExitTree`, private fields `NCardGrid._cardSize` / `_needsReinit`.
-  - View mini-cards tickbox: `NCardsViewScreen.ConnectSignals`, `NCardsViewScreen._showUpgrades`
-    (`NTickbox`), `NTickbox.IsTicked` / `Toggled`, `MegaLabel.SetTextAutoSize`, scene name
-    `%ViewUpgradesLabel`.
-  - Minimap: `NMapScreen._Process`, private fields `NMapScreen._mapPointDictionary` / `_runState`,
-    `RunState.CurrentMapCoord`, and on the data model `MapPoint.coord` / `PointType` / `Children`,
-    `NMapPoint.Point` / `State`, enums `MapPointType` / `MapPointState`.
+- Built and tested for STS2 `v0.109.0`; `TestedGameVersion` in code and `min_game_version` in the
+  manifest record that compatibility target.
+- Mouse, keyboard, and controller can activate every DeckView checkbox. On the flat map,
+  controller focus starts on a legal destination; directional input moves between destinations
+  and accept travels there. The classic map links its default focus to the **Flat map** checkbox.
+- DeckView uses private game members, so every STS2 update still requires verification.
+  `scripts/verify-hooks.sh` and the in-game preflight maintain the complete hook inventory.
+  Missing hooks disable DeckView cleanly and preserve vanilla behavior.
+- Full build and in-game checks require an installed copy of STS2 and cannot run in public CI.
 - To support a newer game build: rebuild against its `sts2.dll`, then bump `TestedGameVersion`
   and `manifest.json`'s `min_game_version` / name to that version.
+
+## License
+
+DeckView is available under the [MIT License](LICENSE). Slay the Spire 2 and its assets are
+owned by Mega Crit; no game assemblies or assets are distributed with this project.

@@ -30,8 +30,8 @@ views) and an **alternate map view**. Companion docs: `screen-system.md` (capsto
   frame; skipped under controller input.
 - **[done]** Visible **"Mini-cards" toggle** in the deck control cluster (by the sort buttons /
   "View upgrades"), **on by default**, hotkey **T**. Persisted across runs (`user://deckview.cfg`).
-- **[done*]** The toggle matches the game's "View upgrades" control: game checkbox art, native size,
-  and the same label font size (Kreon). Placement still wants tuning.
+- **[done]** The toggle measures the live "View upgrades" control and matches its game checkbox art,
+  effective size, and Kreon label font. Mouse, keyboard, and controller activation are supported.
 
 ---
 
@@ -149,8 +149,9 @@ views) and an **alternate map view**. Companion docs: `screen-system.md` (capsto
 
 ## 4. Invariants & policies (mandatory)
 
-- **Work or crash — never degrade.** No probe-and-disable, no catch-and-fall-back-to-vanilla. A
-  missing/renamed hooked member throws loudly. (Reflection resolves fail-loud via `Reflect`.)
+- **Preflight and disable safely.** Validate every private/string-named hook before patching.
+  Missing members or setup failures log a clear incompatibility and preserve the vanilla UI;
+  never leave a partially enabled feature.
 - **View-only / connectivity sanctity.** Never modify the real map's data or nodes; the moves we draw
   ARE the vanilla player's moves. We only reassign *display lanes*. Never overlap two nodes (would
   hide a choice). A runtime assert crashes rather than draw an illegal layout.
@@ -166,7 +167,8 @@ views) and an **alternate map view**. Companion docs: `screen-system.md` (capsto
   metrics + a 500-map property test + curated cases + a **viz tool** (`layouttest -- viz` renders any
   captured level and compression options as ASCII). This is where the algorithm is proven before it
   ships.
-- **`MAPDUMP`** logging: each map open logs the live graph so a real level can be replayed offline.
+- **`MAPDUMP`** logging: developer opt-in only via `[debug] dump_map_graph=true` in
+  `user://deckview.cfg`; it is off for new and upgraded users.
 - **Diagnostics:** toggle positions/sizes/font-size and per-open state are logged so one play-test
   pinpoints tuning. Screenshots load from `c:\screenshots`.
 - **Reliability principle:** pure logic → offline tests (gold standard); game-integration → verify

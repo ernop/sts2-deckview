@@ -2,7 +2,7 @@
   "id": "deckview",
   "name": "DeckView",
   "author": "ernes",
-  "description": "Shrinks cards in deck-like views (deck view, draw/discard/exhaust piles, card library, and deck card-select screens) so more fit on screen and the whole deck is easier to read at a glance; toggle with the on-screen View mini-cards button or T. Hover still pops a card to full size. Also adds an alternate flat map: the whole act compacted onto one screen as a real top-level page (press M anywhere to open/close the map; toggle the Flat map / Compress checkboxes to configure it). Choose-a-card, card-reward, unlock, shop, and card-bundle screens are left at normal size. Built and tested for Slay the Spire 2 v0.109.0.",
+  "description": "Zooms out deck-like views and adds a new, clearer whole-act map view for Slay the Spire 2. Mini-cards make decks and piles visible at a glance while hover restores full size; the optional flat map shows the same routes left-to-right on one screen. DeckView changes visibility and UI layout only—it does not change cards, routes, travel rules, combat, rewards, saves, or any other gameplay. Toggle mini-cards on screen or with T; press M for the map and O to switch map styles. Built and tested for Slay the Spire 2 v0.109.0.",
   "version": "0.1.0",
   "has_pck": false,
   "has_dll": true,

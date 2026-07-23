@@ -84,8 +84,8 @@ do the equivalent via the shared `CapstoneBackstop`. Open call-path: `NMapRoom._
 `NMapScreen.Instance.Open()`; toggled by `NTopBarMapButton` (`NRun.Instance.GlobalUi.TopBar.Map`).
 
 ## Recipe for a code-built (no-.tscn) screen — what DeckView's minimap does
-1. `class MiniMapScreen : Control, ICapstoneScreen` — implement `ScreenType` (reuse
-   `NetScreenType.DeckView`), `UseSharedBackstop => true`, `DefaultFocusedControl`.
+1. `class MiniMapScreen : Control, ICapstoneScreen` — implement `ScreenType`
+   (`NetScreenType.Map`), `UseSharedBackstop => true`, and a real `DefaultFocusedControl`.
 2. Build UI in code; draw via the `Draw` **signal** and take input via the `gui_input` **signal**
    (source generators don't run for us, so `_Draw`/`_GuiInput` overrides never fire — but interface
    methods and signal connections do).
@@ -93,4 +93,4 @@ do the equivalent via the shared `CapstoneBackstop`. Open call-path: `NMapRoom._
    routes focus). Dismiss: `NCapstoneContainer.Instance.Close()`.
 4. Native ESC/back: in `AfterCapstoneOpened` push `NHotkeyManager.Instance.PushHotkeyReleasedBinding(
    MegaInput.cancel, OnBack)`; remove it in `AfterCapstoneClosed`. LIFO dispatch makes ours win while
-   open, and removing it lets ESC then back out to the real map beneath.
+   open. DeckView closes the entire map page rather than revealing a classic-map layer underneath.

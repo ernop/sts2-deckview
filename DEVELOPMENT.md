@@ -4,15 +4,17 @@ Everything here is about *inspecting the game* and *building the mod*. It is
 deliberately explicit so nobody has to rediscover it. This repo runs from WSL
 (Linux) but the toolchain is the Windows one under `/mnt/c`.
 
-## Error policy: work or crash — never degrade
+## Compatibility policy: preflight, then enable all-or-nothing
 
-**DeckView does not do graceful degradation.** If a hook target or reflected
-member is missing, or a patch fails, we let it throw and crash rather than
-catch-and-continue with a "fallback" to vanilla behavior. Silent fallbacks hide
-exactly the errors we need to see (a renamed field, a moved method after a game
-update). Reflection lookups resolve at load and throw immediately if a member is
-absent. There is no "leave the UI vanilla" path. If a game update breaks a hook,
-we want a loud crash pointing at the broken member, not a quietly half-working mod.
+`Runtime/ModRuntime.cs` validates every private/string-named game member before
+Harmony applies a patch. Missing members produce one explicit `DISABLED` log with
+the full list, and STS2 continues with its vanilla UI. If `PatchAll` fails partway,
+DeckView calls `UnpatchSelf`; every callback also checks `ModRuntime.Enabled`, so
+even an unsuccessful rollback cannot run a half-enabled feature.
+
+Unexpected errors at patch, input, and draw boundaries disable further DeckView
+callbacks instead of terminating the game. Keep `HookCatalog` and
+`scripts/verify-hooks.sh` synchronized whenever a game integration changes.
 
 ## The game
 
@@ -21,7 +23,7 @@ we want a loud crash pointing at the broken member, not a quietly half-working m
 - Managed DLLs live in `…\Slay the Spire 2\data_sts2_windows_x86_64\`.
   The mod references `sts2.dll`, `GodotSharp.dll`, `0Harmony.dll` from there
   (reference-only — nothing is bundled or copied).
-- Built/tested against game version **v0.108.0** (assemblies dated 2025-05-04).
+- Built/tested against game version **v0.109.0**.
 
 ## Decompiler (how to read game internals)
 
@@ -52,8 +54,9 @@ Notes:
 
 ## Building
 
-- **There is no Linux `dotnet`.** Use the Windows SDK from WSL:
-  `/mnt/c/Program Files/dotnet/dotnet.exe`
+- Building the mod itself requires the Windows game assemblies. From WSL, use the
+  Windows SDK at `/mnt/c/Program Files/dotnet/dotnet.exe`. Public CI can use Linux
+  .NET for the game-independent layout tests.
 - Normal build is the PowerShell script (runs the Windows dotnet + installs into
   the game's `mods\deckview\`):
 
@@ -70,6 +73,19 @@ Notes:
   env var, or the default install path (in that order).
 - After building: launch STS2 → Mods menu → enable DeckView → restart (Godot
   compiles mods on startup). Launch with `--nomods` for a vanilla A/B comparison.
+- Package an in-game-tested DLL with `.\scripts\package.ps1`; see `PUBLISHING.md`.
+
+## Source organization
+
+- `DeckViewMod.cs` — card/map controllers, Harmony patch boundaries, and map rendering.
+- `Runtime/ModRuntime.cs` — compatibility catalog, guarded Harmony lifecycle, reflection helpers.
+- `Config/DeckViewConfig.cs` — persisted user settings and debug opt-ins.
+- `UI/ToggleSwitch.cs` — measured game-native toggles and keyboard/controller activation.
+- `layout/` — pure map layout algorithm and property-test executable.
+
+Keep game-independent logic in `layout/`. If map rendering grows further, split model extraction
+and rendering into separate `Map/` files without moving reflection or patch lifecycle back into
+feature code.
 
 ## Map data model (reference for the minimap work)
 
@@ -88,5 +104,3 @@ field names — they are what we reflect into):
   implements public `IRunState`) → `.Map`, `.CurrentMapCoord`, `.VisitedMapCoords`.
 - `MapPointType` enum: `Unassigned, Unknown, Shop, Treasure, RestSite, Monster,
   Elite, Boss, Ancient`.
-</content>
-</invoke>
