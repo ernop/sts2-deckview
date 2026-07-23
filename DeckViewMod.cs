@@ -1293,26 +1293,35 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
             return;
 
         int minLane = int.MaxValue, maxLane = int.MinValue, minRow = int.MaxValue, maxRow = int.MinValue;
+        int minRaw = int.MaxValue, maxRaw = int.MinValue;
         foreach (MiniNode n in model.Nodes.Values)
         {
             minLane = Math.Min(minLane, LaneOf(n));
             maxLane = Math.Max(maxLane, LaneOf(n));
+            minRaw = Math.Min(minRaw, n.RawLane);   // uncompressed span = the vertical-height reference
+            maxRaw = Math.Max(maxRaw, n.RawLane);
             minRow = Math.Min(minRow, n.Coord.row);
             maxRow = Math.Max(maxRow, n.Coord.row);
         }
         float rowSpan = Math.Max(1, maxRow - minRow);
-        float laneSpan = Math.Max(1, maxLane - minLane);
+        float refLaneSpan = Math.Max(1, maxRaw - minRaw); // the raw/uncompressed lane count
         float marginX = Size.X * 0.05f, marginTop = Size.Y * 0.16f, marginBottom = Size.Y * 0.12f;
         float drawW = Size.X - 2f * marginX;
         float drawH = Size.Y - marginTop - marginBottom;
-        _nodeRadius = Mathf.Clamp(Math.Min(drawW / rowSpan, drawH / laneSpan) * 0.34f, 7f, 24f);
+        // Lane spacing is FIXED to the uncompressed span, NOT re-stretched to fill the height. So the
+        // raw layout fills the area, and a compressed layout (fewer lanes) draws proportionally SHORTER
+        // — the cleared rows become real empty space at the bottom instead of vanishing into a stretch.
+        // Row spacing still fills the width. Node size is the same in both views (consistent row-height).
+        float rowSpacing = drawW / rowSpan;
+        float laneSpacing = drawH / refLaneSpan;
+        _nodeRadius = Mathf.Clamp(Math.Min(rowSpacing, laneSpacing) * 0.34f, 7f, 24f);
 
         _positions.Clear();
         foreach (MiniNode n in model.Nodes.Values)
         {
             _positions[n.Coord] = new Vector2(
-                marginX + (n.Coord.row - minRow) / rowSpan * drawW,
-                marginTop + (LaneOf(n) - minLane) / laneSpan * drawH);
+                marginX + (n.Coord.row - minRow) * rowSpacing,
+                marginTop + (LaneOf(n) - minLane) * laneSpacing); // top-anchored; empty space falls at the bottom
         }
     }
 
