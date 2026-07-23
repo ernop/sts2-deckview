@@ -30,14 +30,10 @@ the deck-view screen and on our minimap page).
 ## Interfaces
 - `Nodes.Screens.ScreenContext.IScreenContext` — `Control? DefaultFocusedControl { get; }` (+ a
   default `FocusedControlFromTopBar`).
-- `Nodes.Screens.Capstones.ICapstoneScreen : IScreenContext` — the real "stackable full-screen"
-  contract:
-  ```csharp
-  NetScreenType ScreenType { get; }   // synced to multiplayer peers
-  bool UseSharedBackstop { get; }
-  void AfterCapstoneOpened();
-  void AfterCapstoneClosed();
-  ```
+- `Nodes.Screens.Capstones.ICapstoneScreen : IScreenContext` — the "stackable full-screen" contract.
+  The members a mod must implement: a `ScreenType` getter (a `NetScreenType`, synced to multiplayer
+  peers), a `UseSharedBackstop` bool getter, and two lifecycle callbacks `AfterCapstoneOpened()` /
+  `AfterCapstoneClosed()` invoked by the container.
   `NetScreenType` (enum, `Entities.Multiplayer`): None, Room, Map, Settings, Compendium, DeckView,
   CardPile, SimpleCardsView, CardSelection, GameOver, PauseMenu, Rewards, Feedback,
   SharedRelicPicking, RemotePlayerExpandedState.

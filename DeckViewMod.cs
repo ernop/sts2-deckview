@@ -595,6 +595,9 @@ internal static class MiniMapController
     // complete the room you're in — in that case there are no legal moves yet, so we neither dim the
     // current node "done" nor highlight the downstream options.
     private static readonly MethodInfo TravelEnabledGetter = Reflect.PropertyGetter(typeof(NMapScreen), "IsTravelEnabled");
+    // Recomputes each point's travel State from the run state. The game runs this inside Open(); we
+    // call it ourselves so the flat page has fresh travelability WITHOUT ever opening the classic map.
+    private static readonly MethodInfo RecalcTravelMethod = Reflect.Method(typeof(NMapScreen), "RecalculateTravelability", Type.EmptyTypes);
     // The game's "you are here" arrow — NMapMarker (a TextureRect) whose .Texture is the current
     // character's MapMarker art. We read that live texture so our page marks the current node the
     // exact way the real map does. (Null in multiplayer, where the game suppresses the marker.)
@@ -675,25 +678,15 @@ internal static class MiniMapController
         return cc != null && _screen != null && ReferenceEquals(cc.CurrentCapstoneScreen, _screen);
     }
 
-    // Called every frame the map screen processes (NMapScreen._Process isn't focus-gated).
+    // Runs while the CLASSIC map is processing (classic mode only — in flat mode NMapScreen is never
+    // opened, so this doesn't run). Its only job is to mount the "Flat map" checkbox on the classic
+    // map and keep it hidden under any capstone. The M/O keys are polled globally in GlobalTick.
     internal static void Tick(NMapScreen screen)
     {
-        if (!screen.IsVisibleInTree()) { _oWasDown = false; return; }
-
-        // Add the "Flat map" toggle onto the classic map once, and keep it visible ONLY when the
-        // classic map is the front screen (hidden whenever a capstone — deck view, our flat page,
-        // settings — is over it, so it can't bleed onto another screen).
+        if (!screen.IsVisibleInTree()) return;
         EnsureMapToggle(screen);
         if (_mapToggle != null && GodotObject.IsInstanceValid(_mapToggle))
             _mapToggle.Visible = NCapstoneContainer.Instance?.CurrentCapstoneScreen == null;
-
-        // O flips the map STYLE (flat<->classic) IN PLACE — only meaningful while a map is displayed,
-        // which is exactly when this Tick runs. It flips the "Flat map" checkbox (persisted, both
-        // on-screen toggles kept in agreement) and swaps the visible view. Not a global shortcut.
-        bool o = Input.IsKeyPressed(DeckViewMod.ToggleMiniMapKey);
-        if (o && !_oWasDown)
-            SetFlat(!FlatOpen());
-        _oWasDown = o;
     }
 
     // Wired once to the SceneTree's per-frame signal (via the NGlobalUi._Ready patch) so the global
@@ -708,74 +701,83 @@ internal static class MiniMapController
         Log.Info("[DeckView] global map-key (M) hook installed");
     }
 
-    // M — the single global map shortcut. Toggles map visibility from anywhere; when opening, the
-    // map appears in whatever the checkboxes are configured to (flat/classic, compressed/raw).
+    // M — the single global map shortcut (toggle the map open/closed, from anywhere). O — flip the
+    // MODE (flat<->classic) but only while a map is showing.
     private static void GlobalTick()
     {
         bool m = Input.IsKeyPressed(DeckViewMod.MapKey);
-        if (m && !_mWasDown) ToggleMap(); // ToggleMap no-ops when there's no map (main menu etc.)
+        if (m && !_mWasDown) ToggleMap();
         _mWasDown = m;
+
+        bool o = Input.IsKeyPressed(DeckViewMod.ToggleMiniMapKey);
+        if (o && !_oWasDown && MapShown()) SetFlat(!DeckViewConfig.PreferFlatMap);
+        _oWasDown = o;
     }
 
-    // Show the map (in the configured style) if nothing map-like is up; otherwise close it entirely.
+    // Is the map showing, in EITHER mode? Flat mode -> our capstone; classic mode -> NMapScreen.IsOpen.
+    // (In flat mode the classic screen is never opened, so IsOpen stays false — the two are exclusive.)
+    private static bool MapShown() => FlatOpen() || (NMapScreen.Instance?.IsOpen ?? false);
+
+    // Compact one-line snapshot, for tracing.
+    private static string MapState(string where)
+    {
+        NMapScreen? s = NMapScreen.Instance;
+        string cap = NCapstoneContainer.Instance?.CurrentCapstoneScreen?.GetType().Name ?? "none";
+        return $"[DeckView] {where}: IsOpen={s?.IsOpen} flatOpen={FlatOpen()} " +
+               $"prefFlat={DeckViewConfig.PreferFlatMap} capstone={cap}";
+    }
+
+    // M: if the map is showing (either mode) -> close it; else -> open it. Opening just calls the
+    // game's Open(); our Open PREFIX renders it in the configured mode (flat page, or classic).
     private static void ToggleMap()
     {
         NMapScreen? screen = NMapScreen.Instance;
         if (screen == null) return;
-        if (screen.IsOpen) CloseMapCompletely(); // classic is open (flat capstone, if any, sits on top of it)
-        else OpenMapConfigured(screen);
+        Log.Info(MapState("M pressed"));
+        if (MapShown()) CloseMapCompletely();
+        else screen.Open();
     }
 
-    // Open the map the way the top-bar button does (closing any other capstone first), then let the
-    // NMapScreen.Open postfix show the flat page if "Flat map" is checked.
-    private static void OpenMapConfigured(NMapScreen screen)
-    {
-        NCapstoneContainer.Instance?.Close();
-        screen.Open();
-    }
-
-    // Fully leave the map -> return to the prior view (fight/reward/room). Closes our flat capstone
-    // (if up) AND the classic map. Nothing reopens the map afterwards (confirmed: no reopen-on-
-    // capstone-close logic exists in the game).
+    // Leave the map entirely -> prior view. Only ONE mode is ever open, so we close exactly that one.
     internal static void CloseMapCompletely()
     {
-        NCapstoneContainer? cc = NCapstoneContainer.Instance;
-        if (cc != null && FlatOpen())
-        {
-            // Hide the classic map INSTANTLY (no fade) first, while our flat page still covers it, so
-            // the fading-out classic map never shows behind the closing flat page. Then dismiss the
-            // flat capstone -> straight back to the prior view.
-            NMapScreen.Instance?.Close(false);
-            cc.Close();
-        }
-        else
-        {
-            NMapScreen.Instance?.Close(); // classic-only: the game's normal animated close is fine
-        }
+        Log.Info(MapState("close"));
+        if (FlatOpen()) NCapstoneContainer.Instance?.Close(); // flat mode: classic was never opened
+        else NMapScreen.Instance?.Close();                    // classic mode
     }
 
-    // Called from the NMapScreen.Open postfix (runs after Open() has finished — map data and
-    // travelability are fully ready). If "Flat map" is checked we show the flat page RIGHT NOW, in
-    // the same frame, so the classic map never renders — M from anywhere lands straight on the flat
-    // page with no flash / no intermediate classic view.
-    internal static void OnMapOpened(NMapScreen screen)
-    {
-        if (DeckViewConfig.PreferFlatMap && !FlatOpen())
-            Open(screen);
-    }
-
-    // THE toggler: pick a map style, persist it, keep both on-screen toggles in agreement, and
-    // switch the visible view to match (open/close the flat page over the still-open classic map).
+    // Switch MODE (flat<->classic), persist it, sync the checkboxes, and re-render the *currently
+    // showing* map in the new mode. Never leaves the other mode visible for a frame.
     internal static void SetFlat(bool flat)
     {
+        Log.Info($"[DeckView] SetFlat({flat}) <- {MapState("setflat")}");
         DeckViewConfig.PreferFlatMap = flat;
         MapStyleToggle.SyncAll(flat);
         NMapScreen? screen = NMapScreen.Instance;
         NCapstoneContainer? cc = NCapstoneContainer.Instance;
         if (screen == null || cc == null) return;
-        bool open = FlatOpen();
-        if (flat && !open) Open(screen);
-        else if (!flat && open) cc.Close();
+        if (flat)
+        {
+            if (screen.IsOpen) screen.Close(false); // drop classic instantly (no fade) — no flash
+            if (!FlatOpen()) OpenFlat(screen);
+        }
+        else
+        {
+            if (FlatOpen()) cc.Close();             // drop the flat page
+            if (!screen.IsOpen) screen.Open();      // classic opens (the Open prefix now allows it)
+        }
+    }
+
+    // Rebuild + redraw the flat page in place (used when the game changes travelability while the
+    // flat page is already showing — e.g. a map room enables travel just after we opened).
+    internal static void RefreshFlat()
+    {
+        if (!FlatOpen() || _screen == null || !GodotObject.IsInstanceValid(_screen)) return;
+        NMapScreen? screen = NMapScreen.Instance;
+        if (screen == null) return;
+        RecalcTravelMethod.Invoke(screen, null);
+        _screen.Configure(BuildModel(screen), screen.GetViewportRect().Size, coord => Travel(screen, coord));
+        _screen.QueueRedraw();
     }
 
     // Add the "Flat map" toggle switch onto the classic map screen (once).
@@ -794,16 +796,28 @@ internal static class MiniMapController
 
     // Open the minimap as a capstone screen — the game parents/shows it, dims the map behind, keeps
     // the top bar, pauses combat, and routes focus/ESC to it, exactly like the deck-view screen.
-    private static void Open(NMapScreen screen)
+    // Entry point from the NMapScreen.Open prefix: render the flat page instead of the classic map.
+    // Guarded so repeated Open() calls (e.g. a map room's reopen-on-capstone-close) don't stack.
+    internal static void OpenFlatFromHook(NMapScreen screen)
+    {
+        if (FlatOpen()) return;
+        OpenFlat(screen);
+    }
+
+    private static void OpenFlat(NMapScreen screen)
     {
         NCapstoneContainer? cc = NCapstoneContainer.Instance;
         if (cc == null) return; // not in a run / no capstone container -> nothing to open into
 
+        // The classic map is NEVER opened in flat mode, so refresh travel state ourselves (Open()
+        // normally does this) before reading it — the point dictionary is already built at act start.
+        RecalcTravelMethod.Invoke(screen, null);
+
         MiniMapModel model = BuildModel(screen);
         Vector2 viewport = screen.GetViewportRect().Size;
-        Log.Info($"[DeckView] minimap open: nodes={model.Nodes.Count} edges={model.Edges.Count} " +
+        Log.Info($"[DeckView] flat open: nodes={model.Nodes.Count} edges={model.Edges.Count} " +
                  $"viewport={viewport} current={(model.Current?.ToString() ?? "none")} " +
-                 $"act={model.ActIndex + 1}:'{model.ActName}' floor={model.ActFloor}");
+                 $"act={model.ActIndex + 1}:'{model.ActName}' floor={model.ActFloor} travelEnabled={model.TravelEnabled}");
 
         if (_screen == null || !GodotObject.IsInstanceValid(_screen))
             _screen = new MiniMapScreen();
@@ -1574,10 +1588,30 @@ internal static class NMapScreen_Process_Patch
 
 // Whenever the map opens (map room, top-bar button, or our global M key), show the configured
 // style: OnMapOpened requests the flat page on the next tick if "Flat map" is checked.
+// The map has TWO co-equal modes: classic and flat. This is the single place the mode is honored —
+// whenever ANYTHING opens the map (a map room, the top-bar button, our M key), if flat mode is on we
+// render the flat page INSTEAD and skip the classic map entirely (it never opens, so it can never
+// show or be fallen back to). In classic mode this patch does nothing and the game opens normally.
 [HarmonyPatch(typeof(NMapScreen), "Open")]
 internal static class NMapScreen_Open_Patch
 {
-    private static void Postfix(NMapScreen __instance) => MiniMapController.OnMapOpened(__instance);
+    private static bool Prefix(NMapScreen __instance, ref NMapScreen __result)
+    {
+        if (!DeckViewConfig.PreferFlatMap)
+            return true; // classic mode -> let the game open the real map
+        MiniMapController.OpenFlatFromHook(__instance);
+        __result = __instance;
+        return false;    // flat mode -> classic map never opens
+    }
+}
+
+// While the flat page is showing, keep it in sync if the game flips travelability (e.g. a map room
+// enables travel just after we opened, or travel disables it) — rebuild + redraw so the "you can move
+// here" highlights are always correct.
+[HarmonyPatch(typeof(NMapScreen), "SetTravelEnabled")]
+internal static class NMapScreen_SetTravelEnabled_Patch
+{
+    private static void Postfix() => MiniMapController.RefreshFlat();
 }
 
 // The UI root's _Ready fires once per run when the global UI is built — the earliest reliable point

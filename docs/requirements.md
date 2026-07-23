@@ -99,19 +99,26 @@ views) and an **alternate map view**. Companion docs: `screen-system.md` (capsto
   spot (reads as one control), never bleeding onto other screens (hidden when any capstone is up).
 - **[done]** **"Compress" toggle** on the flat page, **on by default**: off = raw layout 1:1 with the
   game's columns (proves compression changed nothing but spacing); on = compacted.
-- **[done]** The two checkboxes are the **single source of truth** for how the map looks. The map
-  style (flat vs classic) + compression are a stable, saved preference.
-- **[done]** **M is the only global shortcut** — from ANY screen (combat, reward, room) it toggles
-  the map's visibility. Opening shows the map in exactly the configured checkbox state. Closing
-  (`NMapScreen.Close()` + capstone close) returns to the **prior view**, never a half-state.
-- **[done]** **O is NOT global** — it only acts while a map is displayed, where it flips the "Flat
-  map" checkbox (persisted, both on-screen toggles synced) and swaps flat↔classic **in place**.
-- **[done]** **Flat map is never a submodule of the classic map.** ESC/back from the flat page exits
-  the *whole* map to the prior view — identical to ESC on the classic map. It never peels back to
-  classic. Switching flat↔classic happens ONLY via O or the checkbox, never via ESC.
-- **[done]** Global M is wired via a one-time `SceneTree.ProcessFrame` connection bootstrapped from
-  an `NGlobalUi._Ready` patch (the map's own `_Process` only runs while the map is up, so it can't
-  carry a global key). Confirmed: no game logic reopens the map after a capstone closes.
+- **[done]** **Flat and classic are two co-equal MODES of the one map, never layered** — the
+  load-bearing design rule (night-mode/day-mode analogy). The map is a single slot with two
+  renderings; exactly one is ever open. Opening renders it *according to the current mode*; the other
+  mode never appears — no flash, no fall-back, no "toggle-after-loading."
+- **[done]** Implemented as a **prefix on `NMapScreen.Open`**: whenever anything opens the map (map
+  room, top-bar button, our M key), if flat mode is on we render the flat page and **skip the classic
+  `Open()` entirely** — the classic `NMapScreen` is *never opened* in flat mode (`IsOpen` stays
+  false). Nothing underneath to bleed through or fall back to.
+- **[done]** The flat page refreshes its **own** travelability (`RecalculateTravelability` via
+  reflection) and reads the point dictionary directly — both exist from act start
+  (`SetActInternal → GenerateMap → SetMap`) without the classic map ever opening; travel works closed
+  (`OnMapPointSelectedLocally` ignores `IsOpen`). A `SetTravelEnabled` postfix rebuilds the flat page
+  in place so its "can move here" highlights stay correct.
+- **[done]** The two checkboxes (**Flat map** / **Compress**) are the saved single source of truth
+  for the mode.
+- **[done]** **M** is the only global shortcut (one-time `SceneTree.ProcessFrame` connection from an
+  `NGlobalUi._Ready` patch): from any screen it opens the map in the current mode, or closes it to the
+  **prior view**. **ESC/back** likewise exits the whole map — in flat mode the classic map was never
+  opened, so falling back to it is *structurally impossible*. **O** — only while a map is showing —
+  flips the mode and re-renders in place.
 - **[done]** All toggles are one self-drawn `ToggleSwitch` (game checkbox art, shared font size,
   consistent positions) — item C "all UIs match".
 
