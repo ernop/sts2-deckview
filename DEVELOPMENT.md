@@ -7,14 +7,25 @@ deliberately explicit so nobody has to rediscover it. This repo runs from WSL
 ## Compatibility policy: preflight, then enable all-or-nothing
 
 `Runtime/ModRuntime.cs` validates every private/string-named game member before
-Harmony applies a patch. Missing members produce one explicit `DISABLED` log with
-the full list, and STS2 continues with its vanilla UI. If `PatchAll` fails partway,
-DeckView calls `UnpatchSelf`; every callback also checks `ModRuntime.Enabled`, so
-even an unsuccessful rollback cannot run a half-enabled feature.
+Harmony applies a patch (`HookCatalog.FindMissing`). Missing members produce one
+explicit `DISABLED` log with the full list, and STS2 continues with its vanilla UI.
+If `PatchAll` fails partway, DeckView calls `UnpatchAll(HarmonyId)`; every callback
+also checks `ModRuntime.Enabled`, so even an unsuccessful rollback cannot run a
+half-enabled feature. This preflight revert-with-warning runs in **all** builds.
 
-Unexpected errors at patch, input, and draw boundaries disable further DeckView
-callbacks instead of terminating the game. Keep `HookCatalog` and
-`scripts/verify-hooks.sh` synchronized whenever a game integration changes.
+**Strict (dev) vs public — the failure mode differs, controlled by `DECKVIEW_PUBLIC`:**
+- **Dev/local build (default):** an unexpected error in *our own* patch/input/draw
+  code **re-throws (crashes loudly)** — we never mask our own bugs. This is the
+  "work or crash" rule for us.
+- **Public release build (`-p:DeckViewPublic=true`, set by `scripts/package.ps1`;
+  `build.ps1 -Public`):** those same boundaries **revert to vanilla with a warning**
+  instead of crashing a player's game (we can't control their STS2 version).
+- Functionally identical on a correct version + correct code; only the failure mode
+  differs. Do in-game checks on a normal `build.ps1` build; `package.ps1` rebuilds the
+  public variant into the archive.
+
+Keep `HookCatalog` and `scripts/verify-hooks.sh` synchronized whenever a game
+integration changes.
 
 ## The game
 

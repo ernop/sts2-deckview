@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.ControllerInput;
@@ -8,6 +9,7 @@ using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Map;
 using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
+using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 using MegaCrit.Sts2.Core.Nodes.Screens;
 using MegaCrit.Sts2.Core.Nodes.Screens.Map;
@@ -25,7 +27,11 @@ internal static class ModRuntime
     private static Harmony? _harmony;
 
     internal static bool Enabled { get; private set; }
+    // Raised only in PUBLIC builds (strict/dev builds re-throw before reaching it), so the compiler's
+    // "never used" warning is a false positive there.
+#pragma warning disable CS0067
     internal static event Action? Disabled;
+#pragma warning restore CS0067
 
     internal static bool TryEnable(Assembly assembly)
     {
@@ -58,21 +64,33 @@ internal static class ModRuntime
             try
             {
                 // PatchAll is not transactional. Remove any classes it applied before the failure.
-                _harmony.UnpatchSelf();
+                _harmony.UnpatchAll(HarmonyId);
             }
             catch (Exception rollback)
             {
                 Log.Info($"[DeckView] ERROR: patch rollback failed; all patch callbacks remain " +
                          $"disabled by their runtime guards: {rollback}");
             }
+#if !DECKVIEW_PUBLIC
+            // Dev build: a PatchAll failure is our bug (bad patch attribute) — crash loudly.
+            throw new InvalidOperationException("[DeckView] STRICT (dev) build: Harmony setup failed — fix before release.", ex);
+#else
             LogDisabled($"Harmony setup failed: {ex}");
             return false;
+#endif
         }
     }
 
     /// <summary>Disable callbacks after an unexpected runtime integration failure.</summary>
     internal static void Disable(string location, Exception ex)
     {
+#if !DECKVIEW_PUBLIC
+        // Dev/local builds are STRICT: never mask our own bugs. Re-throw (preserving the stack) so an
+        // unexpected failure in our patch code crashes loudly. Public builds (DECKVIEW_PUBLIC) fall
+        // through to the revert-with-warning below instead. (Compatibility preflight is separate and
+        // reverts+warns in both.)
+        ExceptionDispatchInfo.Capture(ex).Throw();
+#else
         if (!Enabled)
             return;
         Enabled = false;
@@ -89,6 +107,7 @@ internal static class ModRuntime
             }
         }
         LogDisabled($"{location} failed: {ex}");
+#endif
     }
 
     private static void LogDisabled(string reason) =>

@@ -9,8 +9,15 @@ $workshopManifestPath = Join-Path $root "workshop\content\deckview.json"
 $dllPath = Join-Path $root "bin\deckview.dll"
 $dist = Join-Path $root "dist"
 
+# Ship the PUBLIC variant: on an incompatible/failed hook it reverts to vanilla with a warning
+# instead of the dev-default strict crash. Functionally identical to the dev build you tested; only
+# the failure mode differs. (Do your in-game checks on a normal build.ps1 build first.)
+Write-Host "Building PUBLIC release DLL ..."
+& (Join-Path $PSScriptRoot "build.ps1") -Public
+if ($LASTEXITCODE -ne 0) { throw "Public build failed." }
+
 if (-not (Test-Path $dllPath)) {
-    throw "Missing '$dllPath'. Run .\scripts\build.ps1 and complete the in-game checks first."
+    throw "Missing '$dllPath' after the public build."
 }
 
 $manifestText = [IO.File]::ReadAllText($manifestPath)

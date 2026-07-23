@@ -6,8 +6,10 @@
 #
 # Override the game path if it isn't the default Steam location:
 #   $env:STS2 = "D:\Games\Slay the Spire 2"
+#   .\scripts\build.ps1 -Public    # build the PUBLIC release variant (reverts to vanilla with a
+#                                  # warning on failure, instead of the dev-default strict crash)
 [CmdletBinding()]
-param([switch]$Install)
+param([switch]$Install, [switch]$Public)
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -19,8 +21,9 @@ if (-not (Test-Path (Join-Path $data "sts2.dll"))) {
     throw "Couldn't find sts2.dll under '$data'. Set `$env:STS2 to your Slay the Spire 2 install folder."
 }
 
-Write-Host "Building against $data ..."
-dotnet build "$root\deckview.csproj" -c Release -p:Sts2Data="$data" -o "$root\bin"
+$mode = if ($Public) { "PUBLIC (revert-to-vanilla on failure)" } else { "dev/STRICT (crash on failure)" }
+Write-Host "Building against $data  [$mode] ..."
+dotnet build "$root\deckview.csproj" -c Release -p:Sts2Data="$data" -p:DeckViewPublic=$($Public.IsPresent.ToString().ToLower()) -o "$root\bin"
 if ($LASTEXITCODE -ne 0) { throw "Build failed." }
 
 $dll = Join-Path $root "bin\deckview.dll"

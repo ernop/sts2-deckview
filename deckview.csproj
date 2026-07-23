@@ -15,6 +15,15 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>
 
+  <!-- Error-handling mode. Default (dev) builds are STRICT: an unexpected integration failure in our
+       own patch code re-throws (crashes loudly) so we catch our bugs. The PUBLIC release build
+       (-p:DeckViewPublic=true, set by scripts/package.ps1) instead reverts to vanilla with a logged
+       warning, since we can't control which game version a player runs. Compatibility preflight
+       (missing hooks -> revert + warn) is unconditional in both. -->
+  <PropertyGroup Condition="'$(DeckViewPublic)' == 'true'">
+    <DefineConstants>$(DefineConstants);DECKVIEW_PUBLIC</DefineConstants>
+  </PropertyGroup>
+
   <!-- Path to the game's managed-DLL folder. Override with:
          dotnet build -p:Sts2Data="D:\Path\...\data_sts2_windows_x86_64"
        or set the STS2_DATA environment variable. -->
