@@ -95,18 +95,32 @@ public static class MapLayout
         // Pick fewer lanes (the goal: clear whole rows); tie-break on straightness. Crossings are
         // equal either way, so this never trades away readability of connections.
         int la = LayoutMetrics.LanesUsed(aligned), lp = LayoutMetrics.LanesUsed(packed);
-        if (lp != la) return lp < la ? packed : aligned;
-        return LayoutMetrics.VerticalEdgeLength(g, packed) <= LayoutMetrics.VerticalEdgeLength(g, aligned)
-            ? packed : aligned;
+        int[] compact = lp != la
+            ? (lp < la ? packed : aligned)
+            : (LayoutMetrics.VerticalEdgeLength(g, packed) <= LayoutMetrics.VerticalEdgeLength(g, aligned) ? packed : aligned);
+
+        // A steep mid-map spike (a body edge jumping 2+ lanes between floors — a shape the vanilla map
+        // never makes) reads worse than one extra lane. So also build a gentle slope-1 layout, and
+        // prefer it when it removes steep edges for at most ONE extra lane.
+        int[] gentle = AssignLanesMaxSlope(g, 1);
+        if (LayoutMetrics.SteepBodyEdges(g, gentle) < LayoutMetrics.SteepBodyEdges(g, compact)
+            && LayoutMetrics.LanesUsed(gentle) <= LayoutMetrics.LanesUsed(compact) + 1)
+            return gentle;
+        return compact;
     }
 
-    // Pack each floor's rooms into lanes 0..k-1 by column order — the fewest lanes possible
-    // (= the widest floor). Legal by construction (distinct + col-ordered per row).
+    // Pack each floor's rooms into the fewest lanes (= the widest floor), CENTERED on the midline by
+    // column order — so narrow floors sit in the middle and the whole map is balanced top-to-bottom
+    // instead of hugging the top. Legal by construction (distinct + col-ordered per row); the lane
+    // count is unchanged (still = widest floor). A constant shift to non-negative changes nothing
+    // about the shape (the drawing normalizes the range) but keeps HillClimb's [0, cap] bounds valid.
     private static int[] MinPack(LGraph g)
     {
         var lane = new int[g.Nodes.Length];
         foreach (int[] row in g.RowsOrdered)
-            for (int i = 0; i < row.Length; i++) lane[row[i]] = i;
+            for (int i = 0; i < row.Length; i++) lane[row[i]] = i - (row.Length - 1) / 2;
+        int min = lane.Min();
+        if (min != 0) for (int i = 0; i < lane.Length; i++) lane[i] -= min;
         return lane;
     }
 
@@ -149,9 +163,16 @@ public static class MapLayout
 
     // Shorten edges by shifting rigid same-lane runs / single nodes ±1, never leaving [0, laneCap]
     // (the cap keeps the compact candidate from re-expanding; pass int.MaxValue for unbounded).
-    private static void HillClimb(LGraph g, int[] lane, int laneCap)
+    // maxSlope caps how many lanes a single edge may span between adjacent floors (the vanilla map
+    // only ever steps one column, i.e. slope 1). int.MaxValue = unconstrained (the default path).
+    private static void HillClimb(LGraph g, int[] lane, int laneCap, int maxSlope = int.MaxValue)
     {
-        // Bounded by monotonic decrease of integer edge length; the cap is just a safety net.
+        // Center line (2x, to stay in integers) — the midpoint of the initial lane range. We pull the
+        // layout toward it so paths sit around the middle instead of drifting to the top/bottom edge.
+        int center2 = lane.Min() + lane.Max();
+
+        // Bounded by a lexicographic potential (edge length, then distance-from-center) that strictly
+        // decreases each accepted move; the cap + guard are safety nets.
         for (int guard = 0; guard < 100_000; guard++)
         {
             bool improved = false;
@@ -168,7 +189,14 @@ public static class MapLayout
                 foreach (int delta in new[] { 1, -1 })
                 {
                     bool inBounds = set.All(id => lane[id] + delta >= 0 && lane[id] + delta <= laneCap);
-                    if (inBounds && IsLegalShift(g, lane, set, delta) && EdgeLengthDelta(g, lane, set, delta) < 0)
+                    if (!inBounds || !IsLegalShift(g, lane, set, delta) || !SlopeOk(g, lane, set, delta, maxSlope)) continue;
+                    int edgeDelta = EdgeLengthDelta(g, lane, set, delta);
+                    // Accept if it SHORTENS edges (fewer/smaller angles), OR if it's edge-neutral and
+                    // pulls this run toward the center line. Edge-neutral => no angle is added; the run
+                    // slides rigidly (stays flat), so we never introduce a kink just to center.
+                    bool accept = edgeDelta < 0
+                        || (edgeDelta == 0 && CenterDistanceDelta(lane, set, delta, center2) < 0);
+                    if (accept)
                     {
                         foreach (int id in set) lane[id] += delta;
                         improved = true;
@@ -179,6 +207,16 @@ public static class MapLayout
             }
             if (!improved) return;
         }
+    }
+
+    // Change in total distance-from-center (2x units) if `set` shifts by `delta`. Negative => the
+    // move brings these nodes closer to the middle line.
+    private static int CenterDistanceDelta(int[] lane, int[] set, int delta, int center2)
+    {
+        int d = 0;
+        foreach (int id in set)
+            d += Math.Abs(2 * (lane[id] + delta) - center2) - Math.Abs(2 * lane[id] - center2);
+        return d;
     }
 
     // Connected components over edges whose two endpoints currently share a lane.
@@ -240,6 +278,43 @@ public static class MapLayout
         return d;
     }
 
+    // Would shifting `set` by `delta` leave every edge spanning at most `maxSlope` lanes? Only
+    // boundary edges (one endpoint moving) can change; int.MaxValue disables the check.
+    private static bool SlopeOk(LGraph g, int[] lane, int[] set, int delta, int maxSlope)
+    {
+        if (maxSlope >= int.MaxValue) return true;
+        int lastRow = g.RowsOrdered.Length - 1;
+        var moving = new HashSet<int>(set);
+        foreach ((int a, int b) in g.Edges)
+        {
+            bool am = moving.Contains(a), bm = moving.Contains(b);
+            if (am == bm) continue;
+            // Start (row 0) fans out and the boss (last row) converges — those edges are inherently
+            // steep (one node <-> many), so they're exempt from the slope cap.
+            if (g.RowOf[a] == 0 || g.RowOf[b] == 0 || g.RowOf[a] == lastRow || g.RowOf[b] == lastRow)
+                continue;
+            int la = lane[a] + (am ? delta : 0), lb = lane[b] + (bm ? delta : 0);
+            if (Math.Abs(la - lb) > maxSlope) return false;
+        }
+        return true;
+    }
+
+    // EXPERIMENTAL variant: compact while forbidding any edge steeper than `maxSlope` lanes/floor
+    // (maxSlope 1 = the vanilla "only step one column" shape — no diagonal-2 jumps). Starts from the
+    // game's own columns (already slope-1) and only straightens/merges within that cap, so it stays
+    // feasible. Trades some lane-compression for the gentler vanilla slope.
+    public static int[] AssignLanesMaxSlope(LGraph g, int maxSlope)
+    {
+        int[] lane = g.BaselineLanes();
+        for (int i = 0; i < 64; i++)
+        {
+            HillClimb(g, lane, int.MaxValue, maxSlope);
+            if (!TryMergeLane(g, lane)) break;
+        }
+        Compact(lane);
+        return lane;
+    }
+
     // Remove globally-unused lanes by remapping used lane values to consecutive ranks. Monotonic,
     // so it preserves all orders and never lengthens an edge (rank gaps <= value gaps).
     private static void Compact(int[] lane)
@@ -289,6 +364,20 @@ public static class LayoutMetrics
 
     // Distinct lanes in use — the drawing's height.
     public static int LanesUsed(int[] lane) => lane.Distinct().Count();
+
+    // Steepest single edge (lanes spanned between adjacent floors). 1 == the gentle vanilla shape.
+    public static int MaxEdgeSlope(LGraph g, int[] lane) =>
+        g.Edges.Length == 0 ? 0 : g.Edges.Max(e => Math.Abs(lane[e.From] - lane[e.To]));
+
+    // Count of steep BODY edges (2+ lanes between floors), excluding the inherently-steep start
+    // fan-out (row 0) and boss converge-in (last row). This is the "ugly mid-map spike" count.
+    public static int SteepBodyEdges(LGraph g, int[] lane)
+    {
+        int last = g.RowCount - 1;
+        return g.Edges.Count(e =>
+            g.RowOf[e.From] != 0 && g.RowOf[e.To] != 0 && g.RowOf[e.From] != last && g.RowOf[e.To] != last
+            && Math.Abs(lane[e.From] - lane[e.To]) >= 2);
+    }
 
     // Edge crossings between edges that span the same pair of rows (readability, report-only).
     public static int Crossings(LGraph g, int[] lane)

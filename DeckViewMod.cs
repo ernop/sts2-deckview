@@ -665,8 +665,6 @@ internal static class MiniMapController
         return rect != null && GodotObject.IsInstanceValid(rect) ? rect.Texture : null;
     }
 
-    private static bool _oWasDown, _mWasDown;
-    private static bool _globalTickInstalled;   // ProcessFrame hook wired once (for the global M key)
     private const string MapToggleMeta = "deckview_mapstyle_toggle";
     private static MiniMapScreen? _screen;      // reused capstone instance, reconfigured per open
     private static ToggleSwitch? _mapToggle;    // the "Flat map" toggle bolted onto the classic map
@@ -689,34 +687,52 @@ internal static class MiniMapController
             _mapToggle.Visible = NCapstoneContainer.Instance?.CurrentCapstoneScreen == null;
     }
 
-    // Wired once to the SceneTree's per-frame signal (via the NGlobalUi._Ready patch) so the global
-    // M key works from ANY screen, not just while the map is up.
-    internal static void InstallGlobalTick(Node anyNode)
-    {
-        if (_globalTickInstalled) return;
-        SceneTree? tree = anyNode.GetTree();
-        if (tree == null) return;
-        tree.Connect(SceneTree.SignalName.ProcessFrame, Callable.From(GlobalTick));
-        _globalTickInstalled = true;
-        Log.Info("[DeckView] global map-key (M) hook installed");
-    }
+    // The map is bound to a game key (M by default). We intercept that key in NInputManager and
+    // route it here, suppressing the vanilla action so ONLY this fires — no more double-toggle with
+    // the game's own map button. Fired once per press (from the shortcut prefix).
+    internal static void OnMapKey() => ToggleMap();
 
-    // M — the single global map shortcut (toggle the map open/closed, from anywhere). O — flip the
-    // MODE (flat<->classic) but only while a map is showing.
-    private static void GlobalTick()
+    // O flips the MODE (flat<->classic), only meaningful while a map is showing.
+    internal static void OnFlipKey()
     {
-        bool m = Input.IsKeyPressed(DeckViewMod.MapKey);
-        if (m && !_mWasDown) ToggleMap();
-        _mWasDown = m;
-
-        bool o = Input.IsKeyPressed(DeckViewMod.ToggleMiniMapKey);
-        if (o && !_oWasDown && MapShown()) SetFlat(!DeckViewConfig.PreferFlatMap);
-        _oWasDown = o;
+        if (MapShown()) SetFlat(!DeckViewConfig.PreferFlatMap);
     }
 
     // Is the map showing, in EITHER mode? Flat mode -> our capstone; classic mode -> NMapScreen.IsOpen.
     // (In flat mode the classic screen is never opened, so IsOpen stays false — the two are exclusive.)
-    private static bool MapShown() => FlatOpen() || (NMapScreen.Instance?.IsOpen ?? false);
+    internal static bool MapShown() => FlatOpen() || (NMapScreen.Instance?.IsOpen ?? false);
+
+    // We deliberately closed the map on this process frame — used to swallow the map room's
+    // synchronous ReopenMap (fired on capstone-close) so a deliberate close actually stays closed.
+    private static ulong _closeFrame = ulong.MaxValue;
+    internal static bool SuppressReopenThisFrame() => Engine.GetProcessFrames() == _closeFrame;
+
+    // HOTKEY-COLLISION SELF-CHECK (runs once). For each key WE use, log which game action (if any)
+    // is bound to the same physical key. A surprise collision (like map==M) is then obvious in the
+    // log at a glance instead of a 50-minute debugging spiral. Diagnostic-only: tolerant of a missing
+    // field (never crashes the mod over logging).
+    private static bool _keyAuditDone;
+    internal static void AuditKeysOnce(NInputManager mgr)
+    {
+        if (_keyAuditDone) return;
+        _keyAuditDone = true;
+        var field = typeof(NInputManager).GetField("_keyboardInputMap",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        var gameMap = field?.GetValue(mgr) as System.Collections.IDictionary;
+        (Key key, string label)[] ours =
+            { (DeckViewMod.MapKey, "map"), (DeckViewMod.ToggleMiniMapKey, "flip/O"), (DeckViewMod.ToggleDeckModeKey, "deck/T") };
+        var sb = new System.Text.StringBuilder("[DeckView] KEY AUDIT (our key -> colliding game action):");
+        foreach (var (key, label) in ours)
+        {
+            var hits = new List<string>();
+            if (gameMap != null)
+                foreach (System.Collections.DictionaryEntry e in gameMap)
+                    if (e.Value is Key gk && gk == key) hits.Add(e.Key?.ToString() ?? "?");
+            sb.Append($"  {label}={key}->{(hits.Count > 0 ? string.Join("+", hits) : "none")}");
+        }
+        sb.Append(gameMap == null ? "  (game keymap unavailable)" : "");
+        Log.Info(sb.ToString());
+    }
 
     // Compact one-line snapshot, for tracing.
     private static string MapState(string where)
@@ -727,21 +743,24 @@ internal static class MiniMapController
                $"prefFlat={DeckViewConfig.PreferFlatMap} capstone={cap}";
     }
 
-    // M: if the map is showing (either mode) -> close it; else -> open it. Opening just calls the
-    // game's Open(); our Open PREFIX renders it in the configured mode (flat page, or classic).
+    // Map key: if the map is showing (either mode) -> close it; else -> open it. Opening just calls
+    // the game's Open(); our Open PREFIX renders it in the configured mode (flat page, or classic).
     private static void ToggleMap()
     {
         NMapScreen? screen = NMapScreen.Instance;
         if (screen == null) return;
-        Log.Info(MapState("M pressed"));
+        Log.Info(MapState("map key"));
         if (MapShown()) CloseMapCompletely();
         else screen.Open();
     }
 
     // Leave the map entirely -> prior view. Only ONE mode is ever open, so we close exactly that one.
+    // Stamp the frame so the map room's ReopenMap (fired synchronously on capstone-close) is swallowed
+    // by the Open prefix — otherwise a deliberate close would instantly bounce back open.
     internal static void CloseMapCompletely()
     {
         Log.Info(MapState("close"));
+        _closeFrame = Engine.GetProcessFrames();
         if (FlatOpen()) NCapstoneContainer.Instance?.Close(); // flat mode: classic was never opened
         else NMapScreen.Instance?.Close();                    // classic mode
     }
@@ -1597,8 +1616,19 @@ internal static class NMapScreen_Open_Patch
 {
     private static bool Prefix(NMapScreen __instance, ref NMapScreen __result)
     {
+        // Swallow the map room's synchronous ReopenMap when WE just deliberately closed this frame,
+        // so a close actually stays closed instead of instantly bouncing back open.
+        if (MiniMapController.SuppressReopenThisFrame())
+        {
+            Log.Info("[DeckView] map open suppressed (deliberate close this frame)");
+            __result = __instance;
+            return false;
+        }
         if (!DeckViewConfig.PreferFlatMap)
+        {
+            Log.Info("[DeckView] classic map open"); // invocation log — every view transition is traced
             return true; // classic mode -> let the game open the real map
+        }
         MiniMapController.OpenFlatFromHook(__instance);
         __result = __instance;
         return false;    // flat mode -> classic map never opens
@@ -1614,10 +1644,31 @@ internal static class NMapScreen_SetTravelEnabled_Patch
     private static void Postfix() => MiniMapController.RefreshFlat();
 }
 
-// The UI root's _Ready fires once per run when the global UI is built — the earliest reliable point
-// to hook the SceneTree's per-frame signal so the global map key (M) works from any screen.
-[HarmonyPatch(typeof(NGlobalUi), "_Ready")]
-internal static class NGlobalUi_Ready_Patch
+// THE map key. The game hard-binds the map to a key (M by default) and re-broadcasts that key as the
+// `mega_view_map` action here, in NInputManager.ProcessShortcutKeyInput — the one choke point that
+// fires in EVERY context (combat, map room, deck view), regardless of the top-bar button's state.
+// We intercept the map key (honoring rebinds) and our O key here, route to our own toggle, and skip
+// the original so the vanilla map action is NEVER broadcast — one handler, no double-toggle.
+[HarmonyPatch(typeof(NInputManager), "ProcessShortcutKeyInput")]
+internal static class NInputManager_ShortcutKey_Patch
 {
-    private static void Postfix(NGlobalUi __instance) => MiniMapController.InstallGlobalTick(__instance);
+    private static bool Prefix(object[] __args)
+    {
+        if (__args.Length == 0 || __args[0] is not InputEventKey k || k.IsEcho() || !k.IsPressed())
+            return true;
+        NInputManager? mgr = NInputManager.Instance;
+        if (mgr == null) return true;
+        MiniMapController.AuditKeysOnce(mgr); // one-time: log which game actions share our keys
+        if (k.Keycode == mgr.GetShortcutKey(MegaInput.viewMap))
+        {
+            MiniMapController.OnMapKey();
+            return false; // suppress the vanilla map action -> no collision with the game's map button
+        }
+        if (k.Keycode == DeckViewMod.ToggleMiniMapKey && MiniMapController.MapShown())
+        {
+            MiniMapController.OnFlipKey();
+            return false;
+        }
+        return true;
+    }
 }

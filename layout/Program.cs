@@ -65,30 +65,32 @@ internal static class Runner
 
     private static void CompressionAnalysis()
     {
-        // The latest captured level (Act 2 — Hive), from the in-game MAPDUMP.
+        // The captured level (Act 1 — Overgrowth, floor 17), from the in-game MAPDUMP — the one with
+        // the mid-map single-node peak we're diagnosing.
         const string nodes =
-            "0,3 1,2 1,6 2,1 2,3 2,6 3,0 3,1 3,2 3,3 3,6 4,0 4,2 4,3 4,6 5,1 5,3 5,6 6,0 6,2 6,4 6,6 " +
-            "7,0 7,2 7,3 7,4 7,5 8,0 8,1 8,3 8,5 9,0 9,2 9,3 9,4 9,6 10,0 10,1 10,3 10,5 10,6 " +
-            "11,0 11,1 11,3 11,5 11,6 12,0 12,4 12,6 13,0 13,5 13,6 14,0 14,6 15,3";
+            "0,3 1,0 1,2 1,3 2,0 2,2 2,3 3,0 3,2 3,3 4,0 4,2 5,0 5,1 5,2 6,0 6,1 6,2 7,0 7,2 7,3 " +
+            "8,0 8,1 8,2 8,3 8,4 9,0 9,2 9,4 10,0 10,1 10,3 10,5 11,1 11,2 11,3 11,4 11,6 12,2 12,4 12,6 " +
+            "13,1 13,3 13,4 13,6 14,0 14,1 14,4 14,6 15,0 15,1 15,3 15,6 16,3";
         const string edges =
-            "0,3->1,2 0,3->1,6 1,2->2,3 1,2->2,1 1,6->2,6 2,1->3,0 2,1->3,1 2,3->3,3 2,3->3,2 2,6->3,6 " +
-            "3,0->4,0 3,1->4,2 3,2->4,2 3,3->4,3 3,3->4,2 3,6->4,6 4,0->5,1 4,2->5,1 4,2->5,3 4,3->5,3 " +
-            "4,6->5,6 5,1->6,2 5,1->6,0 5,3->6,4 5,3->6,2 5,6->6,6 6,0->7,0 6,2->7,2 6,2->7,3 6,4->7,3 " +
-            "6,4->7,4 6,6->7,5 7,0->8,0 7,2->8,1 7,3->8,3 7,4->8,3 7,4->8,5 7,5->8,5 8,0->9,0 8,1->9,0 " +
-            "8,3->9,4 8,3->9,3 8,3->9,2 8,5->9,6 9,0->10,0 9,2->10,1 9,3->10,3 9,4->10,5 9,6->10,6 " +
-            "10,0->11,1 10,0->11,0 10,1->11,1 10,3->11,3 10,5->11,5 10,6->11,6 10,6->11,5 11,0->12,0 " +
-            "11,1->12,0 11,3->12,4 11,5->12,6 11,6->12,6 12,0->13,0 12,4->13,5 12,6->13,5 12,6->13,6 " +
-            "13,0->14,0 13,5->14,6 13,6->14,6 14,0->15,3 14,6->15,3";
+            "0,3->1,0 0,3->1,2 0,3->1,3 1,0->2,0 1,2->2,2 1,3->2,3 2,0->3,0 2,2->3,2 2,2->3,3 2,3->3,3 " +
+            "3,0->4,0 3,2->4,2 3,3->4,2 4,0->5,1 4,0->5,0 4,2->5,1 4,2->5,2 5,0->6,0 5,1->6,2 5,1->6,1 " +
+            "5,2->6,2 6,0->7,0 6,1->7,2 6,2->7,3 6,2->7,2 7,0->8,0 7,2->8,1 7,2->8,2 7,2->8,3 7,3->8,4 " +
+            "8,0->9,0 8,1->9,0 8,2->9,2 8,3->9,2 8,4->9,4 9,0->10,0 9,0->10,1 9,2->10,3 9,4->10,3 9,4->10,5 " +
+            "10,0->11,1 10,1->11,2 10,3->11,3 10,3->11,2 10,3->11,4 10,5->11,6 11,1->12,2 11,2->12,2 " +
+            "11,3->12,4 11,4->12,4 11,6->12,6 12,2->13,1 12,2->13,3 12,4->13,4 12,4->13,3 12,6->13,6 " +
+            "13,1->14,0 13,1->14,1 13,3->14,4 13,4->14,4 13,6->14,6 14,0->15,0 14,1->15,1 14,4->15,3 " +
+            "14,6->15,6 15,0->16,3 15,1->16,3 15,3->16,3 15,6->16,3";
         LGraph g = FromDump(nodes, edges);
 
         void Show(string name, int[] l) =>
             Console.WriteLine($"\n## {name}\n   lanes={LayoutMetrics.LanesUsed(l)}  edgeLen={LayoutMetrics.VerticalEdgeLength(g, l)}  " +
-                              $"crossings={LayoutMetrics.Crossings(g, l)}  legal={LayoutInvariants.IsLegal(g, l)}\n" + RenderGrid(g, l));
+                              $"maxSlope={LayoutMetrics.MaxEdgeSlope(g, l)}  crossings={LayoutMetrics.Crossings(g, l)}  legal={LayoutInvariants.IsLegal(g, l)}\n" + RenderGrid(g, l));
 
-        Console.WriteLine("=== COMPRESSION ANALYSIS — Act 2 Hive ===");
+        Console.WriteLine("=== COMPRESSION ANALYSIS — Act 1 Overgrowth F17 ===");
         Show("A. baseline (raw game columns)", g.BaselineLanes());
         Show("B. our algorithm (flatten + lane-merge)", MapLayout.AssignLanes(g));
         Show("C. min-pack (max compression, ignores crossings)", MinPack(g));
+        Show("D. slope<=1 (vanilla gentle shape; start/boss exempt)", MapLayout.AssignLanesMaxSlope(g, 1));
 
         // Which adjacent lane pairs could be cleanly merged (no floor uses both)?
         int[] algo = MapLayout.AssignLanes(g);
