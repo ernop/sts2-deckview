@@ -71,28 +71,15 @@ public static class DeckViewMod
     // are configured to. M = "map".
     public const Key MapKey = Key.M;
 
-    // Debug: log the live map graph (nodes+edges+assigned lanes) on open, so a real random level
-    // can be reconstructed offline and fed to the layout test harness. Turn off once tuning ends.
-    public const bool DumpMinimapGraph = true;
-
-    // DeckView was built and tested against this game version — purely informational (logged
-    // at load). We patch internal names (methods + private fields) that MegaCrit can rename
-    // between builds, so this records the build we KNOW matches.
-    //
-    // POLICY: work or crash — never degrade. DeckView does NOT probe-and-disable or catch-and-
-    // fall-back-to-vanilla. If a hook target or reflected member is gone (e.g. a game update
-    // renamed it), patching throws and the mod crashes loudly, pointing at the broken member.
-    // A silent fallback would hide exactly that. See DEVELOPMENT.md ("work or crash").
+    // DeckView was built and tested against this game version. On another build, every private
+    // hook is preflighted before Harmony changes anything. Missing hooks disable DeckView and
+    // leave the game's UI untouched instead of crashing or leaving a partially patched mod.
     public const string TestedGameVersion = "v0.109.0";
-
-    private const string HarmonyId = "ernes.deckview";
 
     public static void Init()
     {
-        // No try/catch, no hook probe: if a target is missing PatchAll throws and we crash —
-        // that is the intended behavior. Reflected members (see Reflect below) throw at load
-        // for the same reason. Do NOT wrap this to "leave the UI vanilla".
-        new Harmony(HarmonyId).PatchAll(typeof(DeckViewMod).Assembly);
+        if (!ModRuntime.TryEnable(typeof(DeckViewMod).Assembly))
+            return;
 
         string? gameVersion = ReleaseInfoManager.Instance.ReleaseInfo?.Version;
         string versionNote = gameVersion == TestedGameVersion
@@ -100,41 +87,6 @@ public static class DeckViewMod
             : $" — NOTE: game '{gameVersion ?? "unknown"}' is not the tested {TestedGameVersion}; re-verify";
         Log.Info($"[DeckView] loaded — card scale x{CardScaleFactor}, padding {CardPadding}px{versionNote}");
     }
-}
-
-// Reflection that fails loud. Every reflected member DeckView needs is resolved through here,
-// so a missing/renamed member throws immediately (at type-init / load) instead of silently
-// resolving to null and no-oping later. This is the "work or crash — never degrade" policy in
-// code form: we want a game update that moves a member to crash pointing at that member, not a
-// mod that quietly half-works.
-internal static class Reflect
-{
-    internal static FieldInfo Field(Type type, string name) =>
-        AccessTools.Field(type, name) ?? throw new MissingFieldException(type.FullName, name);
-
-    internal static MethodInfo Method(Type type, string name) =>
-        AccessTools.Method(type, name) ?? throw new MissingMethodException(type.FullName, name);
-
-    internal static MethodInfo Method(Type type, string name, Type[] parameters) =>
-        AccessTools.Method(type, name, parameters) ?? throw new MissingMethodException(type.FullName, name);
-
-    internal static MethodInfo PropertyGetter(Type type, string name) =>
-        AccessTools.PropertyGetter(type, name)
-        ?? throw new MissingMethodException(type.FullName, $"get_{name}");
-}
-
-// Log-once diagnostics. The card/hover patches run every frame per card, so we can't log them
-// unconditionally without flooding the log. Once(key, ...) logs a given key exactly once, which
-// is enough to prove a hot path executed and sample its values. Rearm() re-arms all keys (called
-// when a grid connects) so each fresh deck/library open logs one more sample.
-internal static class Dbg
-{
-    private static readonly HashSet<string> _seen = new();
-    internal static void Once(string key, string message)
-    {
-        if (_seen.Add(key)) Log.Info($"[DeckView] {message}");
-    }
-    internal static void Rearm() => _seen.Clear();
 }
 
 // --- Mini/large toggle: persistent state + hotkey + clean live swap -------------------
@@ -148,80 +100,6 @@ internal static class Dbg
 // runs once. So on toggle we set each live grid's _cardSize from the vanilla base we
 // recorded (times the mode factor) and flag it for reinit — the grid then rebuilds itself
 // (InitGrid) next frame with the new size, padding, and rendered scale all in agreement.
-internal static class DeckViewConfig
-{
-    private const string Path = "user://deckview.cfg";
-
-    private static bool _loaded;
-    private static bool _miniDeck = true;       // default: shrink (original behavior)
-    private static bool _preferFlatMap = false; // default: the game's classic map
-
-    internal static bool MiniDeck
-    {
-        get { EnsureLoaded(); return _miniDeck; }
-        set
-        {
-            EnsureLoaded();
-            if (_miniDeck == value) return;
-            _miniDeck = value;
-            Save();
-        }
-    }
-
-    // Which map style to show: true = DeckView's flat page, false = the game's classic map.
-    internal static bool PreferFlatMap
-    {
-        get { EnsureLoaded(); return _preferFlatMap; }
-        set
-        {
-            EnsureLoaded();
-            if (_preferFlatMap == value) return;
-            _preferFlatMap = value;
-            Save();
-        }
-    }
-
-    // On the flat page: true = vertically compressed layout (default), false = raw 1:1 with the
-    // game's column layout (so a user can confirm compression changed nothing but spacing).
-    private static bool _compressMap = true;
-    internal static bool CompressMap
-    {
-        get { EnsureLoaded(); return _compressMap; }
-        set
-        {
-            EnsureLoaded();
-            if (_compressMap == value) return;
-            _compressMap = value;
-            Save();
-        }
-    }
-
-    private static void EnsureLoaded()
-    {
-        if (_loaded) return;
-        _loaded = true;
-        // Error.Ok check is normal flow (the file legitimately may not exist on first run) —
-        // NOT error hiding. Any real read exception propagates (work-or-crash policy).
-        var cfg = new ConfigFile();
-        if (cfg.Load(Path) == Error.Ok)
-        {
-            _miniDeck = cfg.GetValue("deck", "mini", true).AsBool();
-            _preferFlatMap = cfg.GetValue("map", "flat", false).AsBool();
-            _compressMap = cfg.GetValue("map", "compress", true).AsBool();
-        }
-    }
-
-    private static void Save()
-    {
-        var cfg = new ConfigFile();
-        cfg.Load(Path); // preserve any other keys; a missing file is a benign non-Ok return
-        cfg.SetValue("deck", "mini", _miniDeck);
-        cfg.SetValue("map", "flat", _preferFlatMap);
-        cfg.SetValue("map", "compress", _compressMap);
-        cfg.Save(Path);
-    }
-}
-
 internal static class DeckModeController
 {
     private static readonly FieldInfo CardSizeField = Reflect.Field(typeof(NCardGrid), "_cardSize");
@@ -289,13 +167,22 @@ internal static class NCardGrid_ConnectSignals_Patch
     // recompute from it without re-running ConnectSignals) and shrink only in mini mode.
     private static void Postfix(NCardGrid __instance, ref Vector2 ____cardSize)
     {
+        if (!ModRuntime.Enabled) return;
         Vector2 vanilla = ____cardSize;
-        DeckModeController.Register(__instance, vanilla);
-        Dbg.Rearm(); // new grid connected -> re-arm the once-logs so this open logs fresh samples
-        if (DeckModeController.MiniEnabled)
-            ____cardSize *= DeckViewMod.CardScaleFactor;
-        Log.Info($"[DeckView] grid connected: vanilla cardSize={vanilla}, mini={DeckModeController.MiniEnabled}, " +
-                 $"final cardSize={____cardSize}");
+        try
+        {
+            DeckModeController.Register(__instance, vanilla);
+            Dbg.Rearm();
+            if (DeckModeController.MiniEnabled)
+                ____cardSize *= DeckViewMod.CardScaleFactor;
+            Log.Info($"[DeckView] grid connected: vanilla cardSize={vanilla}, mini={DeckModeController.MiniEnabled}, " +
+                     $"final cardSize={____cardSize}");
+        }
+        catch (Exception ex)
+        {
+            ____cardSize = vanilla;
+            ModRuntime.Disable(nameof(NCardGrid_ConnectSignals_Patch), ex);
+        }
     }
 }
 
@@ -303,7 +190,12 @@ internal static class NCardGrid_ConnectSignals_Patch
 [HarmonyPatch(typeof(NCardGrid), "_ExitTree")]
 internal static class NCardGrid_ExitTree_Patch
 {
-    private static void Postfix(NCardGrid __instance) => DeckModeController.Unregister(__instance);
+    private static void Postfix(NCardGrid __instance)
+    {
+        if (!ModRuntime.Enabled) return;
+        try { DeckModeController.Unregister(__instance); }
+        catch (Exception ex) { ModRuntime.Disable(nameof(NCardGrid_ExitTree_Patch), ex); }
+    }
 }
 
 // Shrink the *rendered* scale of grid cards to match the smaller layout cells.
@@ -321,10 +213,20 @@ internal static class NCardHolder_SmallScale_Patch
 {
     private static void Postfix(NCardHolder __instance, ref Vector2 __result)
     {
-        if (DeckModeController.MiniEnabled && __instance is NGridCardHolder && !GridHoverGate.IsInFixedCardRow(__instance))
+        if (!ModRuntime.Enabled) return;
+        Vector2 vanilla = __result;
+        try
         {
-            __result *= DeckViewMod.CardScaleFactor;
-            Dbg.Once("smallscale", $"SmallScale shrink active (x{DeckViewMod.CardScaleFactor}) -> {__result}");
+            if (DeckModeController.MiniEnabled && __instance is NGridCardHolder && !GridHoverGate.IsInFixedCardRow(__instance))
+            {
+                __result *= DeckViewMod.CardScaleFactor;
+                Dbg.Once("smallscale", $"SmallScale shrink active (x{DeckViewMod.CardScaleFactor}) -> {__result}");
+            }
+        }
+        catch (Exception ex)
+        {
+            __result = vanilla;
+            ModRuntime.Disable(nameof(NCardHolder_SmallScale_Patch), ex);
         }
     }
 }
@@ -335,8 +237,18 @@ internal static class NCardGrid_CardPadding_Patch
 {
     private static void Postfix(ref float __result)
     {
-        if (DeckModeController.MiniEnabled)
-            __result = DeckViewMod.CardPadding;
+        if (!ModRuntime.Enabled) return;
+        float vanilla = __result;
+        try
+        {
+            if (DeckModeController.MiniEnabled)
+                __result = DeckViewMod.CardPadding;
+        }
+        catch (Exception ex)
+        {
+            __result = vanilla;
+            ModRuntime.Disable(nameof(NCardGrid_CardPadding_Patch), ex);
+        }
     }
 }
 
@@ -361,42 +273,40 @@ internal static class MiniCardsToggle_Patch
     // Live switches, so the T hotkey and the on-screen toggle always agree (SyncAll below).
     private static readonly List<ToggleSwitch> _toggles = new();
 
-    // First-pass placement relative to the "View upgrades" control. Tune from the logged pos.
-    public static readonly Vector2 ToggleOffset = new(0f, -52f);
-
     private static void Postfix(NCardsViewScreen __instance)
     {
-        if (__instance.HasMeta(AddedMeta))
-            return;
-        __instance.SetMeta(AddedMeta, true);
-
-        var upgrades = ShowUpgradesField.GetValue(__instance) as Control; // may be null on some screens
-
-        // Match the game's "View upgrades" label — and share the size with EVERY toggle so they all
-        // read identically (item C). The label's theme font_size is a LOGICAL size; the control is
-        // scaled by its ancestors, so the on-screen size is font_size * canvas-scale. We use that
-        // effective pixel size so our (unscaled) toggle matches what the eye sees.
-        if (__instance.GetNodeOrNull("%ViewUpgradesLabel") is Control lbl)
+        if (!ModRuntime.Enabled) return;
+        try
         {
-            int f = lbl.GetThemeFontSize("font_size");
-            float scale = lbl.GetGlobalTransformWithCanvas().Scale.Y;
-            int eff = Mathf.RoundToInt(f * Mathf.Clamp(scale, 0.2f, 1f));
-            Log.Info($"[DeckView] upgrades label font={f} canvasScale={scale:0.###} -> effFont={eff}");
-            if (eff > 0) GameStyle.ToggleFontSize = eff;
+            if (__instance.HasMeta(AddedMeta))
+                return;
+            __instance.SetMeta(AddedMeta, true);
+
+            var upgrades = ShowUpgradesField.GetValue(__instance) as Control;
+            Control? label = __instance.GetNodeOrNull("%ViewUpgradesLabel") as Control;
+            Control? visuals = __instance.GetNodeOrNull("%TickboxVisuals") as Control;
+            GameStyle.ConfigureToggleMetrics(visuals, label);
+
+            var toggle = new ToggleSwitch("Mini-cards", DeckModeController.MiniEnabled, OnMiniToggled)
+            {
+                Name = "DeckViewMiniCardsToggle",
+                ZIndex = 50,
+            };
+            __instance.AddChild(toggle);
+            if (upgrades != null && GodotObject.IsInstanceValid(upgrades))
+            {
+                toggle.GlobalPosition = upgrades.GlobalPosition - new Vector2(0f, toggle.Size.Y + 8f);
+                toggle.FocusNeighborBottom = toggle.GetPathTo(upgrades);
+                upgrades.FocusNeighborTop = upgrades.GetPathTo(toggle);
+            }
+            _toggles.Add(toggle);
+            Log.Info($"[DeckView] mini-cards toggle at {toggle.GlobalPosition} size={toggle.Size} " +
+                     $"font={GameStyle.ToggleFontSize}px box={GameStyle.ToggleBoxSize:0.#}px");
         }
-
-        var toggle = new ToggleSwitch("Mini-cards", DeckModeController.MiniEnabled, OnMiniToggled)
+        catch (Exception ex)
         {
-            Name = "DeckViewMiniCardsToggle",
-            ZIndex = 50,
-        };
-        __instance.AddChild(toggle);
-        if (upgrades != null && GodotObject.IsInstanceValid(upgrades))
-            toggle.GlobalPosition = upgrades.GlobalPosition + ToggleOffset;
-        _toggles.Add(toggle);
-        Log.Info($"[DeckView] mini-cards toggle at {toggle.GlobalPosition} size={toggle.Size} " +
-                 $"fontSize={GameStyle.ToggleFontSize} toggleCanvasScale={toggle.GetGlobalTransformWithCanvas().Scale.Y:0.###} " +
-                 $"(upgrades at {(upgrades != null ? upgrades.GlobalPosition + " size=" + upgrades.Size : "n/a")})");
+            ModRuntime.Disable(nameof(MiniCardsToggle_Patch), ex);
+        }
     }
 
     // Reflect the current mode onto every live switch WITHOUT re-firing the callback (so a T-key
@@ -538,22 +448,28 @@ internal static class NCardGrid_Process_Reconcile_Patch
 {
     private static void Postfix(NCardGrid __instance)
     {
-        DeckModeController.PollHotkey();            // always — so the hotkey works in either mode
-        if (!DeckModeController.MiniEnabled)        // reconcile is only meaningful when shrinking
-            return;
-        if (GridHoverGate.UsingController())
-            return;
-        foreach (NGridCardHolder holder in __instance.CurrentlyDisplayedCardHolders)
+        if (!ModRuntime.Enabled) return;
+        try
         {
-            if (holder == null)
-                continue;
-            if (GridHoverGate.HolderIsFocused.GetValue(holder) is not true) // not enlarged -> nothing to fix
-                continue;
-            if (GridHoverGate.MouseActuallyInside(holder.Hitbox))            // genuinely hovered -> leave it
-                continue;
-            Dbg.Once("reconcile", "hover reconcile fired: forcing a stuck-big card back to small " +
-                                   "+ dismissing its popup via the game's own un-hover path");
-            GridHoverGate.ForceUnhover(holder);                             // stuck big -> shrink
+            DeckModeController.PollHotkey();
+            if (!DeckModeController.MiniEnabled || GridHoverGate.UsingController())
+                return;
+            foreach (NGridCardHolder holder in __instance.CurrentlyDisplayedCardHolders)
+            {
+                if (holder == null)
+                    continue;
+                if (GridHoverGate.HolderIsFocused.GetValue(holder) is not true)
+                    continue;
+                if (GridHoverGate.MouseActuallyInside(holder.Hitbox))
+                    continue;
+                Dbg.Once("reconcile", "hover reconcile fired: forcing a stuck-big card back to small " +
+                                       "+ dismissing its popup via the game's own un-hover path");
+                GridHoverGate.ForceUnhover(holder);
+            }
+        }
+        catch (Exception ex)
+        {
+            ModRuntime.Disable(nameof(NCardGrid_Process_Reconcile_Patch), ex);
         }
     }
 }
@@ -566,8 +482,9 @@ internal static class Create_Reset_Patch
 {
     private static void Postfix(NGridCardHolder __result)
     {
-        if (__result != null)
-            GridHoverGate.ScrubHoverFlags(__result); // in-tree not guaranteed here -> no tween
+        if (!ModRuntime.Enabled || __result == null) return;
+        try { GridHoverGate.ScrubHoverFlags(__result); }
+        catch (Exception ex) { ModRuntime.Disable(nameof(Create_Reset_Patch), ex); }
     }
 }
 
@@ -811,6 +728,12 @@ internal static class MiniMapController
         // control across the two views.
         Vector2 vp = screen.GetViewportRect().Size;
         box.Position = new Vector2(vp.X * 0.04f, vp.Y * 0.80f);
+        Control? mapDefault = screen.DefaultFocusedControl;
+        if (mapDefault != null && GodotObject.IsInstanceValid(mapDefault))
+        {
+            box.FocusNeighborRight = box.GetPathTo(mapDefault);
+            mapDefault.FocusNeighborLeft = mapDefault.GetPathTo(box);
+        }
     }
 
     // Open the minimap as a capstone screen — the game parents/shows it, dims the map behind, keeps
@@ -923,7 +846,7 @@ internal static class MiniMapController
                 Reachable = model.Current is null || reachable.Contains(r.coord),
             };
         }
-        if (DeckViewMod.DumpMinimapGraph)
+        if (DeckViewConfig.DumpMapGraph)
         {
             DumpGraph(raw, model.Edges, lane);
             Log.Info($"[DeckView] visited-? reveals: {(unknownReveals.Count > 0 ? string.Join(" ", unknownReveals) : "(none)")}");
@@ -1027,111 +950,6 @@ internal static class MiniMapController
     }
 }
 
-// Reuse the game's actual UI assets so our own controls match its look. There's no global Godot
-// theme to inherit, so we load the same resources by res:// path from the pck: the Kreon UI font
-// and the real checkbox art. This is the "use their CSS" equivalent — same assets, our elements.
-internal static class GameStyle
-{
-    internal static readonly Color TextColor = new("FFF6E2"); // StsColors.cream — primary UI text
-    internal static Font? Font { get; private set; }
-    internal static Texture2D? Ticked { get; private set; }
-    internal static Texture2D? Unticked { get; private set; }
-    // Shared label size for ALL our toggles so they match each other; seeded to the game's "View
-    // upgrades" size once the deck view is opened (see MiniCardsToggle_Patch).
-    internal static int ToggleFontSize = 18;
-    private static bool _loaded;
-
-    internal static void EnsureLoaded()
-    {
-        if (_loaded) return;
-        _loaded = true;
-        Font = GD.Load<Font>("res://themes/kreon_regular_shared.tres");
-        Ticked = GD.Load<Texture2D>("res://images/atlases/ui_atlas.sprites/checkbox_ticked.tres");
-        Unticked = GD.Load<Texture2D>("res://images/atlases/ui_atlas.sprites/checkbox_unticked.tres");
-        Log.Info($"[DeckView] game style: font={Font != null}, ticked={Ticked != null}, unticked={Unticked != null}");
-    }
-}
-
-// Our own toggle element that wears the game's look: the game's real checkbox art (ticked/unticked)
-// + the Kreon font, loaded via GameStyle. If the art fails to load it falls back to a simple drawn
-// pill so it still works. Draws via the Draw signal and flips on click via gui_input (source-gen
-// safe, same approach as the minimap page).
-internal sealed partial class ToggleSwitch : Control
-{
-    private bool _on;
-    private readonly string _label;
-    private readonly Action<bool> _onToggled;
-    private readonly int _fontSize;
-    private readonly float _box;      // checkbox draw size = game art's native size
-    private const float TrackW = 46f;
-
-    // fontSize <= 0 means "use the shared GameStyle.ToggleFontSize" so every toggle matches.
-    internal ToggleSwitch(string label, bool on, Action<bool> onToggled, int fontSize = 0)
-    {
-        _label = label;
-        _on = on;
-        _onToggled = onToggled;
-        _fontSize = fontSize > 0 ? fontSize : GameStyle.ToggleFontSize;
-        MouseFilter = MouseFilterEnum.Stop;
-        GameStyle.EnsureLoaded();
-        // Checkbox drawn PROPORTIONAL to the label (the atlas art is high-res ~64px; drawing it at
-        // native size dwarfs the game's own checkbox). ~1.3x the font reads like "View upgrades".
-        _box = _fontSize * 1.3f;
-        float h = Mathf.Max(_box, _fontSize + 8f);
-        Size = new Vector2(_box + 12f + label.Length * (_fontSize * 0.62f), h);
-        CustomMinimumSize = Size;
-        Connect(CanvasItem.SignalName.Draw, Callable.From(OnDraw));
-        Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(OnGuiInput));
-    }
-
-    // Set state WITHOUT firing the callback — used to keep several switches in agreement.
-    internal void SetOn(bool on)
-    {
-        if (_on == on) return;
-        _on = on;
-        QueueRedraw();
-    }
-
-    private void OnGuiInput(InputEvent e)
-    {
-        if (e is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
-        {
-            _on = !_on;
-            QueueRedraw();
-            _onToggled(_on);
-        }
-    }
-
-    private void OnDraw()
-    {
-        GameStyle.EnsureLoaded();
-        float cy = Size.Y * 0.5f;
-        float labelX;
-
-        Texture2D? tex = _on ? GameStyle.Ticked : GameStyle.Unticked;
-        if (tex != null) // the game's real checkbox art, at its native size
-        {
-            DrawTextureRect(tex, new Rect2(0f, cy - _box * 0.5f, _box, _box), false);
-            labelX = _box + 8f;
-        }
-        else // fallback: a simple drawn pill switch, so it still works if the art didn't load
-        {
-            const float tr = 9f;
-            float left = tr + 1f, right = TrackW - tr - 1f;
-            Color track = _on ? new Color(0.95f, 0.80f, 0.35f) : new Color(0.24f, 0.26f, 0.30f);
-            DrawCircle(new Vector2(left, cy), tr, track);
-            DrawCircle(new Vector2(right, cy), tr, track);
-            DrawRect(new Rect2(left, cy - tr, right - left, tr * 2f), track);
-            DrawCircle(new Vector2(_on ? right : left, cy), tr - 2f, new Color(0.97f, 0.98f, 1f));
-            labelX = TrackW + 8f;
-        }
-
-        Font font = GameStyle.Font ?? GetThemeDefaultFont();
-        DrawString(font, new Vector2(labelX, cy + _fontSize * 0.35f), _label,
-            HorizontalAlignment.Left, -1, _fontSize, GameStyle.TextColor);
-    }
-}
-
 // The "Flat map" flip-flop toggle, shown on BOTH the classic map and the flat page. All instances
 // stay in agreement via SyncAll; toggling any routes through MiniMapController.SetFlat.
 internal static class MapStyleToggle
@@ -1184,6 +1002,30 @@ internal sealed class MiniMapModel
     public int ActFloor;
 }
 
+internal sealed partial class MapNodeFocusControl : Control
+{
+    private readonly Action _activate;
+
+    internal MapNodeFocusControl(Action activate, Action focused, Action blurred)
+    {
+        _activate = activate;
+        FocusMode = FocusModeEnum.All;
+        MouseFilter = MouseFilterEnum.Ignore;
+        Connect(Control.SignalName.FocusEntered, Callable.From(focused));
+        Connect(Control.SignalName.FocusExited, Callable.From(blurred));
+        Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(OnGuiInput));
+    }
+
+    private void OnGuiInput(InputEvent e)
+    {
+        if (!e.IsActionPressed(MegaInput.accept))
+            return;
+        try { _activate(); }
+        catch (Exception ex) { ModRuntime.Disable(nameof(MapNodeFocusControl), ex); }
+        AcceptEvent();
+    }
+}
+
 // The minimap PAGE: a capstone screen opened via NCapstoneContainer (like the deck-view screen),
 // so the game supplies the top bar, dim backstop, combat pause, and native focus/ESC routing.
 //
@@ -1198,17 +1040,20 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
     private MiniMapModel? _model;
     private Action<MapCoord>? _onTravel;
     private readonly Dictionary<MapCoord, Vector2> _positions = new(); // filled each draw, for hit-testing
+    private readonly Dictionary<MapCoord, MapNodeFocusControl> _nodeFocusControls = new();
     private float _nodeRadius = 12f;
     private MapCoord? _hovered;
+    private MapCoord? _focused;
+    private Control? _defaultFocusedControl;
     private bool _logDrawOnce;
     private bool _compress = true;               // compressed layout vs raw 1:1 with game columns
     private readonly ToggleSwitch _styleToggle;  // "Flat map" (on for this page)
     private readonly ToggleSwitch _compressToggle; // "Compress" (on = flattened; off = raw 1:1)
 
     // --- ICapstoneScreen ---
-    public NetScreenType ScreenType => NetScreenType.DeckView; // a benign existing full-screen type
+    public NetScreenType ScreenType => NetScreenType.Map;
     public bool UseSharedBackstop => true;                      // use the standard dimmed backstop
-    public Control? DefaultFocusedControl => null;
+    public Control? DefaultFocusedControl => _defaultFocusedControl ?? _styleToggle;
 
     internal MiniMapScreen()
     {
@@ -1219,6 +1064,8 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
         _compressToggle = new ToggleSwitch("Compress", DeckViewConfig.CompressMap, OnCompressToggled) { ZIndex = 60 };
         AddChild(_styleToggle);
         AddChild(_compressToggle);
+        _styleToggle.Connect(Control.SignalName.FocusEntered, Callable.From(ClearNodeFocus));
+        _compressToggle.Connect(Control.SignalName.FocusEntered, Callable.From(ClearNodeFocus));
     }
 
     // Which lane to draw a node at: compressed (flattened) or the raw game column (1:1 view).
@@ -1228,6 +1075,8 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
     {
         _compress = on;
         DeckViewConfig.CompressMap = on;
+        UpdateLayoutPositions();
+        RebuildNodeFocusControls();
         QueueRedraw();
     }
 
@@ -1237,6 +1086,7 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
         _model = model;
         _onTravel = onTravel;
         _hovered = null;
+        _focused = null;
         _logDrawOnce = true;
         _compress = DeckViewConfig.CompressMap;
         Position = Vector2.Zero;
@@ -1247,6 +1097,10 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
         _compressToggle.SetOn(_compress);
         _styleToggle.Position = new Vector2(viewport.X * 0.04f, viewport.Y * 0.80f);
         _compressToggle.Position = new Vector2(viewport.X * 0.04f, viewport.Y * 0.855f);
+        _styleToggle.FocusNeighborBottom = _styleToggle.GetPathTo(_compressToggle);
+        _compressToggle.FocusNeighborTop = _compressToggle.GetPathTo(_styleToggle);
+        UpdateLayoutPositions();
+        RebuildNodeFocusControls();
         QueueRedraw();
     }
 
@@ -1262,6 +1116,7 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
         Visible = true; // draw when shown (in case the container left the reused node hidden)
         foreach (StringName hk in BackHotkeys)
             NHotkeyManager.Instance?.PushHotkeyReleasedBinding(hk, OnBack);
+        DefaultFocusedControl?.GrabFocus();
         QueueRedraw();
     }
 
@@ -1296,10 +1151,127 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
     private bool IsTravelable(MapCoord c) =>
         _model != null && _model.Nodes.TryGetValue(c, out MiniNode n) && n.State == MapPointState.Travelable;
 
+    private void ClearNodeFocus()
+    {
+        if (_focused is null) return;
+        _focused = null;
+        QueueRedraw();
+    }
+
+    private void RebuildNodeFocusControls()
+    {
+        foreach (MapNodeFocusControl old in _nodeFocusControls.Values)
+        {
+            if (!GodotObject.IsInstanceValid(old)) continue;
+            RemoveChild(old);
+            old.QueueFree();
+        }
+        _nodeFocusControls.Clear();
+        _defaultFocusedControl = null;
+
+        if (_model == null)
+            return;
+
+        foreach (MiniNode node in _model.Nodes.Values
+                     .Where(n => n.State == MapPointState.Travelable)
+                     .OrderBy(n => n.Coord.row).ThenBy(n => LaneOf(n)))
+        {
+            MapCoord coord = node.Coord;
+            var focus = new MapNodeFocusControl(
+                () => _onTravel?.Invoke(coord),
+                () => { _focused = coord; _hovered = null; QueueRedraw(); },
+                () => { if (_focused is MapCoord c && c.Equals(coord)) { _focused = null; QueueRedraw(); } })
+            {
+                Name = $"MapNode_{coord.row}_{coord.col}",
+                Position = _positions[coord] - new Vector2(_nodeRadius * 1.5f, _nodeRadius * 1.5f),
+                Size = new Vector2(_nodeRadius * 3f, _nodeRadius * 3f),
+                TooltipText = "Travel here",
+            };
+            AddChild(focus);
+            _nodeFocusControls[coord] = focus;
+            _defaultFocusedControl ??= focus;
+        }
+
+        foreach ((MapCoord coord, MapNodeFocusControl focus) in _nodeFocusControls)
+        {
+            focus.FocusNeighborLeft = NeighborPath(coord, Vector2.Left);
+            focus.FocusNeighborRight = NeighborPath(coord, Vector2.Right);
+            focus.FocusNeighborTop = NeighborPath(coord, Vector2.Up);
+            focus.FocusNeighborBottom = NeighborPath(coord, Vector2.Down);
+        }
+
+        if (_defaultFocusedControl is MapNodeFocusControl)
+        {
+            MapNodeFocusControl leftmost = _nodeFocusControls
+                .OrderBy(kv => _positions[kv.Key].X).ThenBy(kv => _positions[kv.Key].Y)
+                .First().Value;
+            leftmost.FocusNeighborLeft = leftmost.GetPathTo(_styleToggle);
+            _styleToggle.FocusNeighborRight = _styleToggle.GetPathTo(leftmost);
+            _compressToggle.FocusNeighborRight = _compressToggle.GetPathTo(leftmost);
+        }
+    }
+
+    private NodePath NeighborPath(MapCoord from, Vector2 direction)
+    {
+        Vector2 origin = _positions[from];
+        MapNodeFocusControl? best = null;
+        float bestScore = float.MaxValue;
+        foreach ((MapCoord coord, MapNodeFocusControl candidate) in _nodeFocusControls)
+        {
+            if (coord.Equals(from)) continue;
+            Vector2 delta = _positions[coord] - origin;
+            float forward = delta.Dot(direction);
+            if (forward <= 0f) continue;
+            float lateral = Mathf.Abs(delta.Cross(direction));
+            float score = delta.Length() + lateral * 1.5f;
+            if (score >= bestScore) continue;
+            bestScore = score;
+            best = candidate;
+        }
+        return best == null ? new NodePath("") : _nodeFocusControls[from].GetPathTo(best);
+    }
+
+    private void UpdateLayoutPositions()
+    {
+        MiniMapModel? model = _model;
+        if (model == null || model.Nodes.Count == 0)
+            return;
+
+        int minLane = int.MaxValue, maxLane = int.MinValue, minRow = int.MaxValue, maxRow = int.MinValue;
+        foreach (MiniNode n in model.Nodes.Values)
+        {
+            minLane = Math.Min(minLane, LaneOf(n));
+            maxLane = Math.Max(maxLane, LaneOf(n));
+            minRow = Math.Min(minRow, n.Coord.row);
+            maxRow = Math.Max(maxRow, n.Coord.row);
+        }
+        float rowSpan = Math.Max(1, maxRow - minRow);
+        float laneSpan = Math.Max(1, maxLane - minLane);
+        float marginX = Size.X * 0.05f, marginTop = Size.Y * 0.16f, marginBottom = Size.Y * 0.12f;
+        float drawW = Size.X - 2f * marginX;
+        float drawH = Size.Y - marginTop - marginBottom;
+        _nodeRadius = Mathf.Clamp(Math.Min(drawW / rowSpan, drawH / laneSpan) * 0.34f, 7f, 24f);
+
+        _positions.Clear();
+        foreach (MiniNode n in model.Nodes.Values)
+        {
+            _positions[n.Coord] = new Vector2(
+                marginX + (n.Coord.row - minRow) / rowSpan * drawW,
+                marginTop + (LaneOf(n) - minLane) / laneSpan * drawH);
+        }
+    }
+
     // Input via the gui_input SIGNAL (override _GuiInput wouldn't fire — same source-gen reason
     // as _Draw). Hover highlights the node under the cursor; a left click on a *travelable* node
     // travels there.
     private void OnGuiInput(InputEvent e)
+    {
+        if (!ModRuntime.Enabled) return;
+        try { HandleGuiInput(e); }
+        catch (Exception ex) { ModRuntime.Disable(nameof(MiniMapScreen) + ".input", ex); }
+    }
+
+    private void HandleGuiInput(InputEvent e)
     {
         if (_model == null)
             return;
@@ -1323,6 +1295,13 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
 
     private void OnDraw()
     {
+        if (!ModRuntime.Enabled) return;
+        try { Render(); }
+        catch (Exception ex) { ModRuntime.Disable(nameof(MiniMapScreen) + ".draw", ex); }
+    }
+
+    private void Render()
+    {
         MiniMapModel? model = _model;
         Vector2 size = Size;
         GameStyle.EnsureLoaded();
@@ -1345,32 +1324,7 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
             return;
         }
 
-        // Grid bounds. Layout is LEFT->RIGHT: the long axis (rows: start..boss) runs along X to use
-        // the widescreen; the vertical axis is the COMPACTED lane from MapLayout (not the raw game
-        // column), so the whole thing is flattened.
-        int minLane = int.MaxValue, maxLane = int.MinValue, minRow = int.MaxValue, maxRow = int.MinValue;
-        foreach (MiniNode n in model.Nodes.Values)
-        {
-            minLane = Math.Min(minLane, LaneOf(n));
-            maxLane = Math.Max(maxLane, LaneOf(n));
-            minRow = Math.Min(minRow, n.Coord.row);
-            maxRow = Math.Max(maxRow, n.Coord.row);
-        }
-        float rowSpan = Math.Max(1, maxRow - minRow);
-        float laneSpan = Math.Max(1, maxLane - minLane);
-
-        float marginX = size.X * 0.05f, marginTop = size.Y * 0.16f, marginBottom = size.Y * 0.12f;
-        float drawW = size.X - 2f * marginX;
-        float drawH = size.Y - marginTop - marginBottom;
-        _nodeRadius = Mathf.Clamp(Math.Min(drawW / rowSpan, drawH / laneSpan) * 0.34f, 7f, 24f);
-
-        Vector2 Pos(MapCoord c) => new(
-            marginX + (c.row - minRow) / rowSpan * drawW,                  // row -> X (start left, boss right)
-            marginTop + (LaneOf(model.Nodes[c]) - minLane) / laneSpan * drawH); // chosen lane -> Y
-
-        _positions.Clear();
-        foreach (MiniNode n in model.Nodes.Values)
-            _positions[n.Coord] = Pos(n.Coord);
+        UpdateLayoutPositions();
 
         // Edges first, so nodes draw on top. Traveled->traveled = the path taken (gold); an edge
         // into an unreachable room is faded so it recedes.
@@ -1389,7 +1343,8 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
         foreach (MiniNode n in model.Nodes.Values)
         {
             bool isCurrent = model.Current is MapCoord cc && cc.col == n.Coord.col && cc.row == n.Coord.row;
-            bool isHovered = _hovered is MapCoord hc && hc.col == n.Coord.col && hc.row == n.Coord.row;
+            bool isHovered = (_hovered is MapCoord hc && hc.col == n.Coord.col && hc.row == n.Coord.row)
+                || (_focused is MapCoord fc && fc.col == n.Coord.col && fc.row == n.Coord.row);
             DrawNode(font, _positions[n.Coord], _nodeRadius, n, isCurrent, isHovered);
         }
 
@@ -1602,7 +1557,12 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
 [HarmonyPatch(typeof(NMapScreen), "_Process")]
 internal static class NMapScreen_Process_Patch
 {
-    private static void Postfix(NMapScreen __instance) => MiniMapController.Tick(__instance);
+    private static void Postfix(NMapScreen __instance)
+    {
+        if (!ModRuntime.Enabled) return;
+        try { MiniMapController.Tick(__instance); }
+        catch (Exception ex) { ModRuntime.Disable(nameof(NMapScreen_Process_Patch), ex); }
+    }
 }
 
 // Whenever the map opens (map room, top-bar button, or our global M key), show the configured
@@ -1616,22 +1576,31 @@ internal static class NMapScreen_Open_Patch
 {
     private static bool Prefix(NMapScreen __instance, ref NMapScreen __result)
     {
-        // Swallow the map room's synchronous ReopenMap when WE just deliberately closed this frame,
-        // so a close actually stays closed instead of instantly bouncing back open.
-        if (MiniMapController.SuppressReopenThisFrame())
+        if (!ModRuntime.Enabled) return true;
+        try
         {
-            Log.Info("[DeckView] map open suppressed (deliberate close this frame)");
+            // Swallow the map room's synchronous ReopenMap when WE just deliberately closed this frame,
+            // so a close actually stays closed instead of instantly bouncing back open.
+            if (MiniMapController.SuppressReopenThisFrame())
+            {
+                Log.Info("[DeckView] map open suppressed (deliberate close this frame)");
+                __result = __instance;
+                return false;
+            }
+            if (!DeckViewConfig.PreferFlatMap)
+            {
+                Log.Info("[DeckView] classic map open");
+                return true;
+            }
+            MiniMapController.OpenFlatFromHook(__instance);
             __result = __instance;
             return false;
         }
-        if (!DeckViewConfig.PreferFlatMap)
+        catch (Exception ex)
         {
-            Log.Info("[DeckView] classic map open"); // invocation log — every view transition is traced
-            return true; // classic mode -> let the game open the real map
+            ModRuntime.Disable(nameof(NMapScreen_Open_Patch), ex);
+            return true;
         }
-        MiniMapController.OpenFlatFromHook(__instance);
-        __result = __instance;
-        return false;    // flat mode -> classic map never opens
     }
 }
 
@@ -1641,7 +1610,12 @@ internal static class NMapScreen_Open_Patch
 [HarmonyPatch(typeof(NMapScreen), "SetTravelEnabled")]
 internal static class NMapScreen_SetTravelEnabled_Patch
 {
-    private static void Postfix() => MiniMapController.RefreshFlat();
+    private static void Postfix()
+    {
+        if (!ModRuntime.Enabled) return;
+        try { MiniMapController.RefreshFlat(); }
+        catch (Exception ex) { ModRuntime.Disable(nameof(NMapScreen_SetTravelEnabled_Patch), ex); }
+    }
 }
 
 // THE map key. The game hard-binds the map to a key (M by default) and re-broadcasts that key as the
@@ -1652,23 +1626,31 @@ internal static class NMapScreen_SetTravelEnabled_Patch
 [HarmonyPatch(typeof(NInputManager), "ProcessShortcutKeyInput")]
 internal static class NInputManager_ShortcutKey_Patch
 {
-    private static bool Prefix(object[] __args)
+    private static bool Prefix(InputEventKey __0)
     {
-        if (__args.Length == 0 || __args[0] is not InputEventKey k || k.IsEcho() || !k.IsPressed())
+        if (!ModRuntime.Enabled || __0.IsEcho() || !__0.IsPressed())
             return true;
-        NInputManager? mgr = NInputManager.Instance;
-        if (mgr == null) return true;
-        MiniMapController.AuditKeysOnce(mgr); // one-time: log which game actions share our keys
-        if (k.Keycode == mgr.GetShortcutKey(MegaInput.viewMap))
+        try
         {
-            MiniMapController.OnMapKey();
-            return false; // suppress the vanilla map action -> no collision with the game's map button
+            NInputManager? mgr = NInputManager.Instance;
+            if (mgr == null) return true;
+            MiniMapController.AuditKeysOnce(mgr);
+            if (__0.Keycode == mgr.GetShortcutKey(MegaInput.viewMap))
+            {
+                MiniMapController.OnMapKey();
+                return false;
+            }
+            if (__0.Keycode == DeckViewMod.ToggleMiniMapKey && MiniMapController.MapShown())
+            {
+                MiniMapController.OnFlipKey();
+                return false;
+            }
+            return true;
         }
-        if (k.Keycode == DeckViewMod.ToggleMiniMapKey && MiniMapController.MapShown())
+        catch (Exception ex)
         {
-            MiniMapController.OnFlipKey();
-            return false;
+            ModRuntime.Disable(nameof(NInputManager_ShortcutKey_Patch), ex);
+            return true;
         }
-        return true;
     }
 }
