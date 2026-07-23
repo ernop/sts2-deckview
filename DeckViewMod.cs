@@ -309,8 +309,14 @@ internal static class MiniCardsToggle_Patch
             if (upgrades != null && GodotObject.IsInstanceValid(upgrades))
             {
                 toggle.GlobalPosition = upgrades.GlobalPosition - new Vector2(0f, toggle.Size.Y + 8f);
+                NodePath previousTop = upgrades.FocusNeighborTop;
                 toggle.FocusNeighborBottom = toggle.GetPathTo(upgrades);
                 upgrades.FocusNeighborTop = upgrades.GetPathTo(toggle);
+                ModRuntime.Disabled += () =>
+                {
+                    if (GodotObject.IsInstanceValid(upgrades))
+                        upgrades.FocusNeighborTop = previousTop;
+                };
             }
             _toggles.Add(toggle);
             Log.Info($"[DeckView] mini-cards toggle at {toggle.GlobalPosition} size={toggle.Size} " +
@@ -598,6 +604,9 @@ internal static class MiniMapController
     private const string MapToggleMeta = "deckview_mapstyle_toggle";
     private static MiniMapScreen? _screen;      // reused capstone instance, reconfigured per open
     private static ToggleSwitch? _mapToggle;    // the "Flat map" toggle bolted onto the classic map
+    private static Control? _classicDefaultFocus;
+    private static NodePath _classicPreviousLeft = new("");
+    private static bool _hasClassicPreviousLeft;
 
     static MiniMapController() => ModRuntime.Disabled += OnModDisabled;
 
@@ -605,6 +614,9 @@ internal static class MiniMapController
     {
         if (_mapToggle != null && GodotObject.IsInstanceValid(_mapToggle))
             _mapToggle.Visible = false;
+        if (_classicDefaultFocus != null && GodotObject.IsInstanceValid(_classicDefaultFocus)
+            && _hasClassicPreviousLeft)
+            _classicDefaultFocus.FocusNeighborLeft = _classicPreviousLeft;
         if (FlatOpen())
             NCapstoneContainer.Instance?.Close();
     }
@@ -754,6 +766,9 @@ internal static class MiniMapController
         Control? mapDefault = ((IScreenContext)screen).DefaultFocusedControl;
         if (mapDefault != null && GodotObject.IsInstanceValid(mapDefault))
         {
+            _classicDefaultFocus = mapDefault;
+            _classicPreviousLeft = mapDefault.FocusNeighborLeft;
+            _hasClassicPreviousLeft = true;
             box.FocusNeighborRight = box.GetPathTo(mapDefault);
             mapDefault.FocusNeighborLeft = mapDefault.GetPathTo(box);
         }
@@ -1151,7 +1166,8 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
         Visible = true; // draw when shown (in case the container left the reused node hidden)
         foreach (StringName hk in BackHotkeys)
             NHotkeyManager.Instance?.PushHotkeyReleasedBinding(hk, OnBack);
-        DefaultFocusedControl?.GrabFocus();
+        if (GridHoverGate.UsingController())
+            DefaultFocusedControl?.GrabFocus();
         QueueRedraw();
     }
 
