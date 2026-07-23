@@ -23,7 +23,7 @@ callbacks instead of terminating the game. Keep `HookCatalog` and
 - Managed DLLs live in `…\Slay the Spire 2\data_sts2_windows_x86_64\`.
   The mod references `sts2.dll`, `GodotSharp.dll`, `0Harmony.dll` from there
   (reference-only — nothing is bundled or copied).
-- Built/tested against game version **v0.109.0**.
+- Current compatibility target: game version **v0.109.0**.
 
 ## Decompiler (how to read game internals)
 
@@ -48,6 +48,8 @@ DLL="C:\\Program Files (x86)\\Steam\\steamapps\\common\\Slay the Spire 2\\data_s
 
 Notes:
 - `-t` on a big type can take a couple of minutes — allow up to ~5 min per call.
+- `scripts/verify-hooks.sh` uses `ilspycmd` from `PATH`, then the maintainer default above.
+  Set `ILSPY` and `STS2_DLL` to override either path.
 - Reinstall if ever missing:
   `"/mnt/c/Program Files/dotnet/dotnet.exe" tool install --global ilspycmd --version 8.2.0.7535`
   (the bare `latest` package has a broken `DotnetToolSettings.xml`; pin the version).
@@ -67,7 +69,7 @@ Notes:
 
   From WSL you can drive the same thing via:
   `"/mnt/c/Program Files/dotnet/dotnet.exe" build deckview.csproj -c Release -o bin`
-  then copy `bin\deckview.dll` + `manifest.json` into
+  then copy `bin\deckview.dll` + `deckview.json` into
   `…\Slay the Spire 2\mods\deckview\`.
 - The csproj resolves the game DLL folder from `-p:Sts2Data=…`, the `STS2_DATA`
   env var, or the default install path (in that order).

@@ -25,5 +25,28 @@ jobs:
       - name: Validate public metadata and assets
         run: python3 scripts/check-metadata.py
 
+      - name: Smoke-test release packaging
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force bin | Out-Null
+          [IO.File]::WriteAllBytes("bin/deckview.dll", [byte[]](1, 2, 3, 4))
+          ./scripts/package.ps1
+
+      - name: Inspect release archive
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, zipfile
+          manifest = json.loads(pathlib.Path("deckview.json").read_text())
+          name = f"deckview-{manifest['version']}-sts2-{manifest['min_game_version']}.zip"
+          path = pathlib.Path("dist") / name
+          with zipfile.ZipFile(path) as archive:
+              assert archive.namelist() == ["deckview/deckview.dll", "deckview/deckview.json"]
+              assert all(item.date_time == (1980, 1, 1, 0, 0, 0) for item in archive.infolist())
+              assert json.loads(archive.read("deckview/deckview.json")) == manifest
+          expected = pathlib.Path(str(path) + ".sha256").read_text().split()[0]
+          assert hashlib.sha256(path.read_bytes()).hexdigest() == expected
+          print(f"package OK: {path}")
+          PY
+
       - name: Validate hook script syntax
         run: bash -n scripts/verify-hooks.sh

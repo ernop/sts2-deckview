@@ -11,8 +11,19 @@
 # Requires ilspycmd (see DEVELOPMENT.md). Exits non-zero if any member is missing.
 set -u
 
-ILSPY="${ILSPY:-/mnt/c/Users/ernes/.dotnet/tools/ilspycmd.exe}"
+if [ -n "${ILSPY:-}" ]; then
+    ILSPY="$ILSPY"
+elif command -v ilspycmd >/dev/null 2>&1; then
+    ILSPY="$(command -v ilspycmd)"
+else
+    ILSPY="/mnt/c/Users/ernes/.dotnet/tools/ilspycmd.exe"
+fi
 DLL="${STS2_DLL:-C:\\Program Files (x86)\\Steam\\steamapps\\common\\Slay the Spire 2\\data_sts2_windows_x86_64\\sts2.dll}"
+
+if [ ! -x "$ILSPY" ]; then
+    printf 'ilspycmd not found at %s; set ILSPY to its executable path\n' "$ILSPY" >&2
+    exit 2
+fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 fail=0
@@ -57,6 +68,8 @@ MegaCrit.Sts2.Core.Runs.RunState|CurrentActIndex
 MegaCrit.Sts2.Core.Runs.RunState|ActFloor
 MegaCrit.Sts2.Core.Runs.RunState|Act
 MegaCrit.Sts2.Core.Runs.RunState|MapPointHistory
+MegaCrit.Sts2.Core.Models.ActModel|Title
+MegaCrit.Sts2.Core.Localization.LocString|GetFormattedText
 MegaCrit.Sts2.Core.ControllerInput.NInputManager|ProcessShortcutKeyInput
 MegaCrit.Sts2.Core.ControllerInput.NControllerManager|IsUsingController
 "

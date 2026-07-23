@@ -8,7 +8,7 @@ travel rules, saves, combat, rewards, or any other gameplay.**
 |---|---|
 | ![Flat map](docs/images/flat-map.png) | ![Mini-cards](docs/images/deck-view.png) |
 
-> **Built and tested for Slay the Spire 2 `v0.109.0`.**
+> **Compatibility target: Slay the Spire 2 `v0.109.0`.**
 >
 > DeckView checks every game hook before enabling. If an STS2 update moves an internal member,
 > DeckView logs the missing hooks, disables itself, and leaves the vanilla UI running. Harmony
@@ -38,7 +38,7 @@ mouse over one, which pops it to full size; move off and it shrinks back.
   map — it never changes your run.
 
 It's a Godot + C# + Harmony rewrite of the original STS1 DeckView mod (Java + ModTheSpire),
-built on STS2's own mod loader — nothing from the game is bundled.
+built on STS2's own mod loader. The install archive bundles no game assemblies or extracted assets.
 
 ## How it works
 
@@ -167,10 +167,11 @@ Slay the Spire 2/
 └── mods/
     └── deckview/
         ├── deckview.dll
-        └── manifest.json
+        └── deckview.json
 ```
 
-Launch STS2, enable DeckView in the **Mods** menu, and restart when prompted.
+Launch STS2 using Steam's **Play with Mods** option, enable DeckView in the **Mods** menu,
+and restart when prompted.
 
 ## Build from source
 
@@ -183,7 +184,7 @@ game-provided `sts2.dll`, `GodotSharp.dll`, and `0Harmony.dll`; none are bundled
 ```
 
 Or manually: `dotnet build deckview.csproj -c Release -o bin`, then copy `bin\deckview.dll`
-and `manifest.json` into `…\Slay the Spire 2\mods\deckview\`.
+and `deckview.json` into `…\Slay the Spire 2\mods\deckview\`.
 
 A/B check: launch with `--nomods` to see vanilla for comparison.
 
@@ -193,8 +194,8 @@ compatibility preflight, and release checks.
 
 ## Status / caveats
 
-- Built and tested for STS2 `v0.109.0`; `TestedGameVersion` in code and `min_game_version` in the
-  manifest record that compatibility target.
+- Targets STS2 `v0.109.0`; `TestedGameVersion` in code and `min_game_version` in the manifest
+  record that target. Build, hook, and in-game checks in `PUBLISHING.md` are release gates.
 - Mouse, keyboard, and controller can activate every DeckView checkbox. On the flat map,
   controller focus starts on a legal destination; directional input moves between destinations
   and accept travels there. The classic map links its default focus to the **Flat map** checkbox.
@@ -203,9 +204,10 @@ compatibility preflight, and release checks.
   Missing hooks disable DeckView cleanly and preserve vanilla behavior.
 - Full build and in-game checks require an installed copy of STS2 and cannot run in public CI.
 - To support a newer game build: rebuild against its `sts2.dll`, then bump `TestedGameVersion`
-  and `manifest.json`'s `min_game_version` / name to that version.
+  and `deckview.json`'s `min_game_version` / description to that version.
 
 ## License
 
 DeckView is available under the [MIT License](LICENSE). Slay the Spire 2 and its assets are
-owned by Mega Crit; no game assemblies or assets are distributed with this project.
+owned by Mega Crit. Repository screenshots depict the game UI; the install archive contains only
+DeckView's DLL and manifest.

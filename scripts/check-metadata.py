@@ -16,12 +16,12 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
-root_manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
+root_manifest = json.loads((ROOT / "deckview.json").read_text(encoding="utf-8"))
 workshop_manifest = json.loads(
-    (ROOT / "workshop/content/manifest.json").read_text(encoding="utf-8")
+    (ROOT / "workshop/content/deckview.json").read_text(encoding="utf-8")
 )
 if root_manifest != workshop_manifest:
-    fail("manifest.json and workshop/content/manifest.json differ")
+    fail("deckview.json and workshop/content/deckview.json differ")
 
 source = (ROOT / "DeckViewMod.cs").read_text(encoding="utf-8")
 match = re.search(r'TestedGameVersion\s*=\s*"v([^"]+)"', source)
@@ -42,6 +42,18 @@ for relative in ("README.md", "DEVELOPMENT.md", "PUBLISHING.md", "docs/requireme
     for stale in ("v0.108.0", "work or crash", "ToggleOffset", "MiniMapView"):
         if stale.lower() in text.lower():
             fail(f"{relative} contains stale text '{stale}'")
+
+game_version = root_manifest["min_game_version"]
+for relative in ("README.md", "DEVELOPMENT.md", "PUBLISHING.md"):
+    text = (ROOT / relative).read_text(encoding="utf-8")
+    if f"v{game_version}" not in text:
+        fail(f"{relative} does not mention current STS2 v{game_version}")
+
+publishing = (ROOT / "PUBLISHING.md").read_text(encoding="utf-8")
+mod_version = root_manifest["version"]
+expected_archive = f"deckview-{mod_version}-sts2-{game_version}.zip"
+if expected_archive not in publishing:
+    fail(f"PUBLISHING.md does not name current archive {expected_archive}")
 
 for relative in ("docs/images/deck-view.png", "docs/images/flat-map.png"):
     size = (ROOT / relative).stat().st_size

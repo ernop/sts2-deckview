@@ -1,7 +1,7 @@
 # Build DeckView and (optionally) install it into the game's mods folder.
 #
 #   .\scripts\build.ps1            # build only -> bin\deckview.dll
-#   .\scripts\build.ps1 -Install   # build, then copy manifest.json + deckview.dll
+#   .\scripts\build.ps1 -Install   # build, then copy deckview.json + deckview.dll
 #                                   # into <game>\mods\deckview\
 #
 # Override the game path if it isn't the default Steam location:
@@ -31,7 +31,7 @@ if ($Install) {
     $dest = Join-Path $game "mods\deckview"
     New-Item -ItemType Directory -Force -Path $dest | Out-Null
     Copy-Item $dll                          -Destination $dest -Force
-    Copy-Item (Join-Path $root "manifest.json") -Destination $dest -Force
+    Copy-Item (Join-Path $root "deckview.json") -Destination $dest -Force
     Write-Host "Installed to $dest"
     Write-Host "Launch STS2 -> Mods menu -> enable DeckView -> restart."
 }

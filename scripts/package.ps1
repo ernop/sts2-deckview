@@ -4,8 +4,8 @@ param()
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$manifestPath = Join-Path $root "manifest.json"
-$workshopManifestPath = Join-Path $root "workshop\content\manifest.json"
+$manifestPath = Join-Path $root "deckview.json"
+$workshopManifestPath = Join-Path $root "workshop\content\deckview.json"
 $dllPath = Join-Path $root "bin\deckview.dll"
 $dist = Join-Path $root "dist"
 
@@ -36,7 +36,7 @@ try {
         $timestamp = [DateTimeOffset]::new(1980, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
         foreach ($source in @(
             @{ Path = $dllPath; Name = "deckview/deckview.dll" },
-            @{ Path = $manifestPath; Name = "deckview/manifest.json" }
+            @{ Path = $manifestPath; Name = "deckview/deckview.json" }
         )) {
             $entry = $archive.CreateEntry(
                 $source.Name, [IO.Compression.CompressionLevel]::Optimal)
