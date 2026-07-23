@@ -42,13 +42,24 @@ internal static class ModRuntime
         }
         catch (Exception ex)
         {
+#if !DECKVIEW_PUBLIC
+            throw new InvalidOperationException("[DeckView] STRICT (dev) build: compatibility preflight threw — fix HookCatalog.", ex);
+#else
             LogDisabled($"compatibility preflight failed: {ex}");
             return false;
+#endif
         }
         if (missing.Count > 0)
         {
-            LogDisabled("incompatible game build; missing hooks: " + string.Join(", ", missing));
+            string list = string.Join(", ", missing);
+#if !DECKVIEW_PUBLIC
+            // Dev build: a missing hook is either a real game change or (as here) a wrong HookCatalog
+            // entry — either way we want it LOUD, not a silent revert that reads as "mod does nothing".
+            throw new InvalidOperationException($"[DeckView] STRICT (dev) build: preflight found missing hooks: {list}");
+#else
+            LogDisabled("incompatible game build; missing hooks: " + list);
             return false;
+#endif
         }
 
         _harmony = new Harmony(HarmonyId);
@@ -179,11 +190,14 @@ internal static class HookCatalog
             }
         }
 
+        // The method's first parameter is the base InputEvent (our patch reads __args[0] and casts to
+        // InputEventKey). So require the first param to be a type that an InputEventKey fits into
+        // (InputEvent or InputEventKey) — NOT that it's exactly InputEventKey (it isn't).
         MethodInfo? shortcut = Method(typeof(NInputManager), "ProcessShortcutKeyInput", missing);
         if (shortcut != null &&
             (shortcut.GetParameters().Length == 0 ||
-             shortcut.GetParameters()[0].ParameterType != typeof(InputEventKey)))
-            missing.Add("NInputManager.ProcessShortcutKeyInput(InputEventKey first argument)");
+             !shortcut.GetParameters()[0].ParameterType.IsAssignableFrom(typeof(InputEventKey))))
+            missing.Add("NInputManager.ProcessShortcutKeyInput(first arg must accept an InputEventKey)");
         Property(typeof(NControllerManager), "IsUsingController", missing);
 
         return missing;
