@@ -92,6 +92,7 @@ internal sealed partial class ToggleSwitch : Control
         TooltipText = $"{label} (press accept to toggle)";
         GameStyle.EnsureLoaded();
         GameStyle.Register(this);
+        ModRuntime.Disabled += OnModDisabled;
         RefreshMetrics();
 
         Connect(CanvasItem.SignalName.Draw, Callable.From(OnDraw));
@@ -122,6 +123,8 @@ internal sealed partial class ToggleSwitch : Control
 
     private void Toggle()
     {
+        if (!ModRuntime.Enabled)
+            return;
         _on = !_on;
         QueueRedraw();
         try
@@ -136,6 +139,8 @@ internal sealed partial class ToggleSwitch : Control
 
     private void OnGuiInput(InputEvent e)
     {
+        if (!ModRuntime.Enabled)
+            return;
         if (e is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
         {
             GrabFocus();
@@ -149,6 +154,13 @@ internal sealed partial class ToggleSwitch : Control
             Toggle();
             AcceptEvent();
         }
+    }
+
+    private void OnModDisabled()
+    {
+        MouseFilter = MouseFilterEnum.Ignore;
+        FocusMode = FocusModeEnum.None;
+        Visible = false;
     }
 
     private void OnDraw()

@@ -25,10 +25,20 @@ internal static class ModRuntime
     private static Harmony? _harmony;
 
     internal static bool Enabled { get; private set; }
+    internal static event Action? Disabled;
 
     internal static bool TryEnable(Assembly assembly)
     {
-        IReadOnlyList<string> missing = HookCatalog.FindMissing();
+        IReadOnlyList<string> missing;
+        try
+        {
+            missing = HookCatalog.FindMissing();
+        }
+        catch (Exception ex)
+        {
+            LogDisabled($"compatibility preflight failed: {ex}");
+            return false;
+        }
         if (missing.Count > 0)
         {
             LogDisabled("incompatible game build; missing hooks: " + string.Join(", ", missing));
@@ -66,6 +76,18 @@ internal static class ModRuntime
         if (!Enabled)
             return;
         Enabled = false;
+        Action? handlers = Disabled;
+        if (handlers != null)
+        {
+            foreach (Action cleanup in handlers.GetInvocationList())
+            {
+                try { cleanup(); }
+                catch (Exception cleanupError)
+                {
+                    Log.Info($"[DeckView] WARNING: disable cleanup failed: {cleanupError}");
+                }
+            }
+        }
         LogDisabled($"{location} failed: {ex}");
     }
 
@@ -98,6 +120,8 @@ internal static class HookCatalog
         Field(typeof(NCardHolder), "_isFocused", missing);
         Field(typeof(NCardHolder), "_hoverTween", missing);
         Method(typeof(NGridCardHolder), "Create", missing);
+        if (AccessTools.DeclaredPropertyGetter(typeof(NGridCardHolder), "SmallScale") != null)
+            missing.Add("NGridCardHolder must inherit SmallScale without overriding it");
         Field(typeof(NClickableControl), "_isHovered", missing);
 
         Method(typeof(NCardsViewScreen), "ConnectSignals", missing);

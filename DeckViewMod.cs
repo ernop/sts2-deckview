@@ -21,6 +21,7 @@ using MegaCrit.Sts2.Core.Nodes.Screens;
 using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 using MegaCrit.Sts2.Core.Nodes.Screens.Map;
+using MegaCrit.Sts2.Core.Nodes.Screens.ScreenContext;
 using MegaCrit.Sts2.Core.Nodes.Screens.Timeline.UnlockScreens;
 
 namespace DeckView;
@@ -110,6 +111,8 @@ internal static class DeckModeController
 
     private static bool _keyWasDown;
 
+    static DeckModeController() => ModRuntime.Disabled += RestoreVanilla;
+
     internal static bool MiniEnabled => DeckViewConfig.MiniDeck;
 
     internal static void Register(NCardGrid grid, Vector2 vanillaCardSize) => _grids[grid] = vanillaCardSize;
@@ -151,6 +154,17 @@ internal static class DeckModeController
             CardSizeField.SetValue(grid, kv.Value * factor);
             NeedsReinitField.SetValue(grid, true);
         }
+    }
+
+    private static void RestoreVanilla()
+    {
+        foreach (KeyValuePair<NCardGrid, Vector2> kv in _grids.ToArray())
+        {
+            if (!GodotObject.IsInstanceValid(kv.Key)) continue;
+            CardSizeField.SetValue(kv.Key, kv.Value);
+            NeedsReinitField.SetValue(kv.Key, true);
+        }
+        _grids.Clear();
     }
 }
 
@@ -262,8 +276,7 @@ internal static class NCardGrid_CardPadding_Patch
 // SCREEN, so a duplicated-and-reparented copy can't resolve them — its ConnectSignals throws
 // NullReferenceException, which (as a postfix of NCardsViewScreen.ConnectSignals) aborts the
 // whole deck-screen build and makes every card disappear. ToggleSwitch has no such scene
-// coupling. Placement is anchored to the "View upgrades" control and still needs tuning (its real
-// layout lives in the .tscn); the resolved position is logged so we can dial it in.
+// coupling. Placement and sizing are measured from the live "View upgrades" control.
 [HarmonyPatch(typeof(NCardsViewScreen), "ConnectSignals")]
 internal static class MiniCardsToggle_Patch
 {
@@ -586,6 +599,16 @@ internal static class MiniMapController
     private static MiniMapScreen? _screen;      // reused capstone instance, reconfigured per open
     private static ToggleSwitch? _mapToggle;    // the "Flat map" toggle bolted onto the classic map
 
+    static MiniMapController() => ModRuntime.Disabled += OnModDisabled;
+
+    private static void OnModDisabled()
+    {
+        if (_mapToggle != null && GodotObject.IsInstanceValid(_mapToggle))
+            _mapToggle.Visible = false;
+        if (FlatOpen())
+            NCapstoneContainer.Instance?.Close();
+    }
+
     // Is our flat page the currently-shown capstone?
     private static bool FlatOpen()
     {
@@ -728,7 +751,7 @@ internal static class MiniMapController
         // control across the two views.
         Vector2 vp = screen.GetViewportRect().Size;
         box.Position = new Vector2(vp.X * 0.04f, vp.Y * 0.80f);
-        Control? mapDefault = screen.DefaultFocusedControl;
+        Control? mapDefault = ((IScreenContext)screen).DefaultFocusedControl;
         if (mapDefault != null && GodotObject.IsInstanceValid(mapDefault))
         {
             box.FocusNeighborRight = box.GetPathTo(mapDefault);
@@ -771,12 +794,15 @@ internal static class MiniMapController
     // then closes the page so the travel animates on the real map.
     private static void Travel(NMapScreen screen, MapCoord coord)
     {
-        if (PointDictField.GetValue(screen) is System.Collections.IDictionary dict
-            && dict[coord] is NMapPoint np && GodotObject.IsInstanceValid(np))
-        {
-            Log.Info($"[DeckView] minimap travel -> {coord}");
-            screen.OnMapPointSelectedLocally(np);
-        }
+        if (!(bool)TravelEnabledGetter.Invoke(screen, null)!)
+            return;
+        if (PointDictField.GetValue(screen) is not System.Collections.IDictionary dict
+            || dict[coord] is not NMapPoint np || !GodotObject.IsInstanceValid(np)
+            || np.State != MapPointState.Travelable)
+            return;
+
+        Log.Info($"[DeckView] minimap travel -> {coord}");
+        screen.OnMapPointSelectedLocally(np);
         NCapstoneContainer.Instance?.Close();
     }
 
@@ -1083,6 +1109,10 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
     // Set the level to draw + viewport size + travel callback (called just before the page opens).
     internal void Configure(MiniMapModel model, Vector2 viewport, Action<MapCoord> onTravel)
     {
+        MapCoord? restoreCoord = _focused;
+        bool restoreNodeFocus = restoreCoord is MapCoord oldCoord
+            && _nodeFocusControls.TryGetValue(oldCoord, out MapNodeFocusControl? oldFocus)
+            && oldFocus.HasFocus();
         _model = model;
         _onTravel = onTravel;
         _hovered = null;
@@ -1101,6 +1131,11 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
         _compressToggle.FocusNeighborTop = _compressToggle.GetPathTo(_styleToggle);
         UpdateLayoutPositions();
         RebuildNodeFocusControls();
+        if (restoreNodeFocus && restoreCoord is MapCoord target
+            && _nodeFocusControls.TryGetValue(target, out MapNodeFocusControl? replacement))
+            replacement.GrabFocus();
+        else if (restoreNodeFocus)
+            DefaultFocusedControl?.GrabFocus();
         QueueRedraw();
     }
 
@@ -1149,7 +1184,8 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
     }
 
     private bool IsTravelable(MapCoord c) =>
-        _model != null && _model.Nodes.TryGetValue(c, out MiniNode n) && n.State == MapPointState.Travelable;
+        _model != null && _model.TravelEnabled
+        && _model.Nodes.TryGetValue(c, out MiniNode n) && n.State == MapPointState.Travelable;
 
     private void ClearNodeFocus()
     {
@@ -1170,6 +1206,9 @@ internal sealed partial class MiniMapScreen : Control, ICapstoneScreen
         _defaultFocusedControl = null;
 
         if (_model == null)
+            return;
+
+        if (!_model.TravelEnabled)
             return;
 
         foreach (MiniNode node in _model.Nodes.Values

@@ -8,6 +8,7 @@ internal static class DeckViewConfig
     private const string Path = "user://deckview.cfg";
 
     private static bool _loaded;
+    private static bool _canSave = true;
     private static bool _miniDeck = true;
     private static bool _preferFlatMap;
     private static bool _compressMap = true;
@@ -62,8 +63,15 @@ internal static class DeckViewConfig
 
         var cfg = new ConfigFile();
         Error result = cfg.Load(Path);
+        if (result == Error.FileNotFound)
+            return;
         if (result != Error.Ok)
-            return; // A missing file is normal on first launch.
+        {
+            _canSave = false;
+            Log.Info($"[DeckView] WARNING: could not read preferences ({result}); " +
+                     "using defaults without overwriting the file");
+            return;
+        }
 
         _miniDeck = cfg.GetValue("deck", "mini", true).AsBool();
         _preferFlatMap = cfg.GetValue("map", "flat", false).AsBool();
@@ -73,8 +81,16 @@ internal static class DeckViewConfig
 
     private static void Save()
     {
+        if (!_canSave)
+            return;
         var cfg = new ConfigFile();
-        cfg.Load(Path); // Preserve manually configured developer/debug keys.
+        Error loadResult = cfg.Load(Path);
+        if (loadResult != Error.Ok && loadResult != Error.FileNotFound)
+        {
+            _canSave = false;
+            Log.Info($"[DeckView] WARNING: could not preserve preferences ({loadResult}); save skipped");
+            return;
+        }
         cfg.SetValue("deck", "mini", _miniDeck);
         cfg.SetValue("map", "flat", _preferFlatMap);
         cfg.SetValue("map", "compress", _compressMap);
