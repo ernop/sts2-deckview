@@ -84,7 +84,7 @@ internal static class Runner
 
         void Show(string name, int[] l) =>
             Console.WriteLine($"\n## {name}\n   lanes={LayoutMetrics.LanesUsed(l)}  edgeLen={LayoutMetrics.VerticalEdgeLength(g, l)}  " +
-                              $"maxSlope={LayoutMetrics.MaxEdgeSlope(g, l)}  crossings={LayoutMetrics.Crossings(g, l)}  legal={LayoutInvariants.IsLegal(g, l)}\n" + RenderGrid(g, l));
+                              $"bends={LayoutMetrics.BendCount(g, l)}  maxSlope={LayoutMetrics.MaxEdgeSlope(g, l)}  crossings={LayoutMetrics.Crossings(g, l)}  legal={LayoutInvariants.IsLegal(g, l)}\n" + RenderGrid(g, l));
 
         Console.WriteLine("=== COMPRESSION ANALYSIS — Act 1 Overgrowth F17 ===");
         Show("A. baseline (raw game columns)", g.BaselineLanes());

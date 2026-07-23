@@ -123,14 +123,27 @@ views) and an **alternate map view**. Companion docs: `screen-system.md` (capsto
   consistent positions) — item C "all UIs match".
 
 ### Compaction algorithm
-- **[done]** Goal: minimize the number of lanes (clear whole rows) AND straighten paths, **without
-  ever adding a crossing**.
-- **[done]** Key property: every step preserves each floor's column order ⇒ the crossing count is
-  invariant (== the game's), so compaction can never scramble which rooms connect.
-- **[done]** Method: two candidates — alignment-first (columns → straighten → merge clean lanes) and
-  compactness-first (min-pack to fewest lanes → straighten within budget) — pick fewer lanes,
-  tie-break straightness. Verified offline: ~27% fewer lanes, ~28% shorter edges, 0 crossings added,
-  legal, across 500 random maps + real captured levels.
+- **[done]** **Hard invariant:** every step preserves each floor's column order ⇒ the crossing count
+  is invariant (== the game's), so compaction can never scramble which rooms connect or overlap two
+  rooms. A runtime assert crashes rather than draw an illegal layout.
+- **[done]** **Preference ladder** (lexicographic — each tier breaks ties within the tier above):
+  1. **No steep body spikes** — a body edge never jumps 2+ lanes between floors (a shape vanilla
+     never makes); the start fan-out (row 0) and boss converge-in (last row) are exempt. A spike
+     reads worse than an extra lane.
+  2. **Fewest lanes** — clear whole rows so the act fits one screen.
+  3. **Fewest slope-state changes (bends)** — minimize how many times a path changes slope on
+     straight-through rooms: "up up" beats "up flat up"; `____/\` (there-and-back bump) is bad vs
+     `/‾‾‾‾` (commit to the level and stay); when a change is inevitable, do it once.
+  4. **Shortest total vertical travel**, then **centered** on the midline.
+- **[done]** **Start and boss share one lane** (the centre line) so the map enters mid-left and exits
+  mid-right at the same height. Single-node rows only (skipped on a two-boss floor); pinned after
+  candidate selection, so it's metric-neutral (their fan-out / converge-in edges are already exempt
+  from the slope rules). Implemented in `MapLayout.PinEnds`.
+- **[done]** Method: three candidates — alignment-first, center-anchored min-pack, and a gentle
+  slope-1-body layout — scored by the ladder above (`MapLayout.Better`). Straightener (`HillClimb`)
+  shortens edges, then takes edge-neutral moves that cut bends, then centering. Verified offline:
+  0 crossings added, 0 illegal, 0 regressed across 500 random maps + real captured levels (viz tool
+  in `layout/`, `dotnet run -- viz`). Metrics: `SteepBodyEdges`, `BendCount`, `MaxEdgeSlope`.
 
 ---
 

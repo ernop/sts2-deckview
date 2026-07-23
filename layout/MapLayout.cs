@@ -92,21 +92,45 @@ public static class MapLayout
         HillClimb(g, packed, packed.Max());
         Compact(packed);
 
-        // Pick fewer lanes (the goal: clear whole rows); tie-break on straightness. Crossings are
-        // equal either way, so this never trades away readability of connections.
-        int la = LayoutMetrics.LanesUsed(aligned), lp = LayoutMetrics.LanesUsed(packed);
-        int[] compact = lp != la
-            ? (lp < la ? packed : aligned)
-            : (LayoutMetrics.VerticalEdgeLength(g, packed) <= LayoutMetrics.VerticalEdgeLength(g, aligned) ? packed : aligned);
-
-        // A steep mid-map spike (a body edge jumping 2+ lanes between floors — a shape the vanilla map
-        // never makes) reads worse than one extra lane. So also build a gentle slope-1 layout, and
-        // prefer it when it removes steep edges for at most ONE extra lane.
+        // Also build a gentle slope-1-body layout (no mid-map spikes), then pick the best of all three
+        // candidates by a strict priority ladder (see Cost): no steep spikes -> fewest lanes -> fewest
+        // slope-state changes -> shortest travel. Crossings are equal for all, so readability of the
+        // connections is never traded away.
         int[] gentle = AssignLanesMaxSlope(g, 1);
-        if (LayoutMetrics.SteepBodyEdges(g, gentle) < LayoutMetrics.SteepBodyEdges(g, compact)
-            && LayoutMetrics.LanesUsed(gentle) <= LayoutMetrics.LanesUsed(compact) + 1)
-            return gentle;
-        return compact;
+        int[] best = aligned;
+        foreach (int[] c in new[] { packed, gentle })
+            if (Better(g, c, best)) best = c;
+        PinEnds(g, best);
+        return best;
+    }
+
+    // Put the start (row 0) and boss (last row) on the SAME lane — the centre line — so the map reads
+    // as entering mid-left and exiting mid-right at one height. Both are single-node rows, so this is
+    // always legal (no same-row neighbour to overlap) and their fan-out/converge edges are already
+    // exempt from the slope rules, so it changes no body metric. Skipped for a multi-node extreme row
+    // (e.g. a two-boss floor) to avoid overlapping them. Re-Compact to drop any lane this emptied.
+    private static void PinEnds(LGraph g, int[] lane)
+    {
+        int center = (lane.Min() + lane.Max()) / 2;
+        int last = g.RowsOrdered.Length - 1;
+        if (g.RowsOrdered[0].Length == 1) lane[g.RowsOrdered[0][0]] = center;
+        if (last != 0 && g.RowsOrdered[last].Length == 1) lane[g.RowsOrdered[last][0]] = center;
+        Compact(lane);
+    }
+
+    // Lexicographic layout preference (all lower = better): (1) no steep body spikes — a body edge
+    // jumping 2+ lanes, a shape vanilla never makes; (2) fewest lanes (clear whole rows); (3) fewest
+    // slope-STATE changes (bends: prefer "up up" over "up flat up", commit to a level and stay); then
+    // (4) shortest total vertical travel.
+    private static bool Better(LGraph g, int[] x, int[] best)
+    {
+        int sx = LayoutMetrics.SteepBodyEdges(g, x), sb = LayoutMetrics.SteepBodyEdges(g, best);
+        if (sx != sb) return sx < sb;
+        int lx = LayoutMetrics.LanesUsed(x), lb = LayoutMetrics.LanesUsed(best);
+        if (lx != lb) return lx < lb;
+        int bx = LayoutMetrics.BendCount(g, x), bb = LayoutMetrics.BendCount(g, best);
+        if (bx != bb) return bx < bb;
+        return LayoutMetrics.VerticalEdgeLength(g, x) < LayoutMetrics.VerticalEdgeLength(g, best);
     }
 
     // Pack each floor's rooms into the fewest lanes (= the widest floor), CENTERED on the midline by
@@ -171,8 +195,8 @@ public static class MapLayout
         // layout toward it so paths sit around the middle instead of drifting to the top/bottom edge.
         int center2 = lane.Min() + lane.Max();
 
-        // Bounded by a lexicographic potential (edge length, then distance-from-center) that strictly
-        // decreases each accepted move; the cap + guard are safety nets.
+        // Bounded by a lexicographic potential (edge length, then bend count, then distance-from-
+        // center) that strictly decreases each accepted move; the cap + guard are safety nets.
         for (int guard = 0; guard < 100_000; guard++)
         {
             bool improved = false;
@@ -191,11 +215,26 @@ public static class MapLayout
                     bool inBounds = set.All(id => lane[id] + delta >= 0 && lane[id] + delta <= laneCap);
                     if (!inBounds || !IsLegalShift(g, lane, set, delta) || !SlopeOk(g, lane, set, delta, maxSlope)) continue;
                     int edgeDelta = EdgeLengthDelta(g, lane, set, delta);
-                    // Accept if it SHORTENS edges (fewer/smaller angles), OR if it's edge-neutral and
-                    // pulls this run toward the center line. Edge-neutral => no angle is added; the run
-                    // slides rigidly (stays flat), so we never introduce a kink just to center.
-                    bool accept = edgeDelta < 0
-                        || (edgeDelta == 0 && CenterDistanceDelta(lane, set, delta, center2) < 0);
+                    bool accept;
+                    if (edgeDelta < 0)
+                    {
+                        accept = true; // shortens edges — always good (fewer/smaller angles)
+                    }
+                    else if (edgeDelta == 0)
+                    {
+                        // Edge-neutral (no angle added / path not lengthened): take it only if it cuts
+                        // the number of slope-STATE changes (e.g. turns "up flat up" into "up up" by
+                        // bunching the level stretch), then as a final tie-break if it centers. Scored
+                        // by apply-measure-revert (graphs are tiny).
+                        int bendBefore = LayoutMetrics.BendCount(g, lane);
+                        int centerBefore = CenterTotal(lane, center2);
+                        foreach (int id in set) lane[id] += delta;
+                        int bendAfter = LayoutMetrics.BendCount(g, lane);
+                        int centerAfter = CenterTotal(lane, center2);
+                        foreach (int id in set) lane[id] -= delta;
+                        accept = bendAfter < bendBefore || (bendAfter == bendBefore && centerAfter < centerBefore);
+                    }
+                    else accept = false;
                     if (accept)
                     {
                         foreach (int id in set) lane[id] += delta;
@@ -209,13 +248,11 @@ public static class MapLayout
         }
     }
 
-    // Change in total distance-from-center (2x units) if `set` shifts by `delta`. Negative => the
-    // move brings these nodes closer to the middle line.
-    private static int CenterDistanceDelta(int[] lane, int[] set, int delta, int center2)
+    // Total distance-from-center (2x units) over all nodes — lower = layout hugs the middle line more.
+    private static int CenterTotal(int[] lane, int center2)
     {
         int d = 0;
-        foreach (int id in set)
-            d += Math.Abs(2 * (lane[id] + delta) - center2) - Math.Abs(2 * lane[id] - center2);
+        foreach (int l in lane) d += Math.Abs(2 * l - center2);
         return d;
     }
 
@@ -377,6 +414,25 @@ public static class LayoutMetrics
         return g.Edges.Count(e =>
             g.RowOf[e.From] != 0 && g.RowOf[e.To] != 0 && g.RowOf[e.From] != last && g.RowOf[e.To] != last
             && Math.Abs(lane[e.From] - lane[e.To]) >= 2);
+    }
+
+    // Number of BENDS — slope CHANGES along straight-through (one-in, one-out) rooms. A smooth
+    // diagonal or a single drop-then-flat has few bends; a \/^\_ wiggle has many. Fork/merge rooms
+    // are skipped (their direction change is structural, not an avoidable kink). This is our proxy
+    // for "how jagged does a path look", independent of total vertical travel.
+    public static int BendCount(LGraph g, int[] lane)
+    {
+        int n = g.Nodes.Length;
+        var indeg = new int[n];
+        var outdeg = new int[n];
+        var inOf = new int[n];
+        var outOf = new int[n];
+        foreach ((int f, int t) in g.Edges) { outdeg[f]++; outOf[f] = t; indeg[t]++; inOf[t] = f; }
+        int bends = 0;
+        for (int i = 0; i < n; i++)
+            if (indeg[i] == 1 && outdeg[i] == 1 && lane[i] - lane[inOf[i]] != lane[outOf[i]] - lane[i])
+                bends++;
+        return bends;
     }
 
     // Edge crossings between edges that span the same pair of rows (readability, report-only).
