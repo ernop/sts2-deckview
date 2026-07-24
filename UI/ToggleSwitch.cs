@@ -19,6 +19,17 @@ internal static class GameStyle
     private static readonly List<ToggleSwitch> Toggles = new();
     private static bool _loaded;
 
+    // One static subscription hides every live toggle on disable; per-instance subscriptions
+    // would outlive freed Godot objects and throw on disposed wrappers during cleanup.
+    static GameStyle() => ModRuntime.Disabled += HideAllToggles;
+
+    private static void HideAllToggles()
+    {
+        Toggles.RemoveAll(t => !GodotObject.IsInstanceValid(t));
+        foreach (ToggleSwitch toggle in Toggles)
+            toggle.OnModDisabled();
+    }
+
     internal static void EnsureLoaded()
     {
         if (_loaded) return;
@@ -92,7 +103,6 @@ internal sealed partial class ToggleSwitch : Control
         TooltipText = $"{label} (press accept to toggle)";
         GameStyle.EnsureLoaded();
         GameStyle.Register(this);
-        ModRuntime.Disabled += OnModDisabled;
         RefreshMetrics();
 
         Connect(CanvasItem.SignalName.Draw, Callable.From(OnDraw));
@@ -156,7 +166,7 @@ internal sealed partial class ToggleSwitch : Control
         }
     }
 
-    private void OnModDisabled()
+    internal void OnModDisabled()
     {
         MouseFilter = MouseFilterEnum.Ignore;
         FocusMode = FocusModeEnum.None;

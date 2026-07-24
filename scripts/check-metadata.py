@@ -39,7 +39,9 @@ for phrase in ("slay the spire 2", "does not change", "gameplay"):
 
 for relative in ("README.md", "DEVELOPMENT.md", "PUBLISHING.md", "docs/requirements.md"):
     text = (ROOT / relative).read_text(encoding="utf-8")
-    for stale in ("v0.108.0", "work or crash", "ToggleOffset", "MiniMapView"):
+    # "work or crash" is intentionally NOT flagged: DEVELOPMENT.md legitimately documents the
+    # strict dev-build failure mode (DECKVIEW_PUBLIC controls the public revert-with-warning).
+    for stale in ("v0.108.0", "ToggleOffset", "MiniMapView"):
         if stale.lower() in text.lower():
             fail(f"{relative} contains stale text '{stale}'")
 

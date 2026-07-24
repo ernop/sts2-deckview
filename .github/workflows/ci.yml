@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -30,7 +31,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force bin | Out-Null
           [IO.File]::WriteAllBytes("bin/deckview.dll", [byte[]](1, 2, 3, 4))
-          ./scripts/package.ps1
+          ./scripts/package.ps1 -SkipBuild
 
       - name: Inspect release archive
         run: |

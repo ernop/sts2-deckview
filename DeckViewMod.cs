@@ -1690,21 +1690,24 @@ internal static class NMapScreen_SetTravelEnabled_Patch
 [HarmonyPatch(typeof(NInputManager), "ProcessShortcutKeyInput")]
 internal static class NInputManager_ShortcutKey_Patch
 {
-    private static bool Prefix(InputEventKey __0)
+    // The method's first parameter is the base InputEvent (see HookCatalog): declare it as that
+    // exact type and pattern-match, so Harmony never has to emit a downcast that would throw on a
+    // non-key event flowing through this path.
+    private static bool Prefix(InputEvent __0)
     {
-        if (!ModRuntime.Enabled || __0.IsEcho() || !__0.IsPressed())
+        if (!ModRuntime.Enabled || __0 is not InputEventKey k || k.IsEcho() || !k.IsPressed())
             return true;
         try
         {
             NInputManager? mgr = NInputManager.Instance;
             if (mgr == null) return true;
             MiniMapController.AuditKeysOnce(mgr);
-            if (__0.Keycode == mgr.GetShortcutKey(MegaInput.viewMap))
+            if (k.Keycode == mgr.GetShortcutKey(MegaInput.viewMap))
             {
                 MiniMapController.OnMapKey();
                 return false;
             }
-            if (__0.Keycode == DeckViewMod.ToggleMiniMapKey && MiniMapController.MapShown())
+            if (k.Keycode == DeckViewMod.ToggleMiniMapKey && MiniMapController.MapShown())
             {
                 MiniMapController.OnFlipKey();
                 return false;
